@@ -57,6 +57,3 @@ function sample!(samples, model, num_samples; ϵ = 0.1, L = 10)
     end
     return nothing 
 end
-
-samples = zeros(Float64, model.dim, 1000)
-sample!(samples, model, 1000)

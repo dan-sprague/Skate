@@ -8,7 +8,7 @@ using Enzyme
 include("lpdfs.jl")
 include("welford.jl")
 include("logdensitygenerator.jl")
-
+include("hmc.jl")
 
 
 export cholesky
