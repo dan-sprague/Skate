@@ -1,3 +1,4 @@
+using SpecialFunctions: loggamma, logbeta
 const _LOG_ZERO = -Inf 
 
 """
