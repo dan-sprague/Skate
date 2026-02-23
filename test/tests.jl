@@ -1,11 +1,13 @@
 using Test 
+using ForwardDiff
 using Distributions
 using Skater
 using LinearAlgebra
 using Statistics
 using FiniteDifferences 
 using Skater: WelfordState, welford_update!, welford_variance
-using Skater: TransformedLogDensity, IdentityTransformation, LogTransformation, ∇logp!, transform, log_abs_det_jacobian, grad_correction,Transformation 
+using Skater: IdentityTransformation, LogTransformation, ∇logp!, transform, log_abs_det_jacobian, grad_correction,Transformation,
+build_log_joint, log_prob, ModelLogDensity, process_params
 
 @testset "Log PDF Functions" begin
     @testset "Density Evaluations" begin 
@@ -139,27 +141,27 @@ end;
     end
 end;
 
-using Test
-using ForwardDiff
+using Enzyme
 using FiniteDifferences
+using ForwardDiff
 
-@testset "ForwardDiff Accuracy vs Finite Differences" begin
-    target_model = TransformedLogDensity(
-        data = randn(100),
-        lpdf = normal_lpdf,
-        transforms = (IdentityTransformation(), LogTransformation()),
-        buffer = zeros(2)
-    )
+@testset "Enzyme Accuracy vs Finite Differences" begin
+    data = randn(10)
+    dim = 2
+    transforms = (IdentityTransformation(), LogTransformation())
+    ℓ = build_log_joint(data, normal_lpdf, transforms)
 
-    q_test = [0.5, -0.2] 
+    model = ModelLogDensity(dim, ℓ)
 
-    ∇logp!(target_model, q_test)
-    ad_grad = copy(target_model.buffer)
+    q_init = zeros(Float64,2)
+    g_buffer = zeros(dim)
 
-    fdm = central_fdm(5, 1) # Highly accurate 5-point central difference
-    fd_grad = FiniteDifferences.grad(fdm, target_model, q_test)[1]
+    log_p, ok = ∇logp!(g_buffer, model, q_init)
 
-    @test ad_grad ≈ fd_grad rtol=1e-6
+    fdm = central_fdm(5, 1) 
+    fd_grad = FiniteDifferences.grad(fdm, q -> log_prob(model, q), q_init)[1]
+
+    @test g_buffer ≈ fd_grad rtol=1e-6
 end
 
 
@@ -173,36 +175,59 @@ end
     @test jac_grad ≈ 1.0
 end
 
-@testset "AD Gradients Allocations" begin
-    target_model = TransformedLogDensity(
-        data = randn(100),
-        lpdf = normal_lpdf,
-        transforms = (IdentityTransformation(), LogTransformation()), 
-        buffer = zeros(2)
-    )
+
+
+@testset "Zero AD Gradients Allocations" begin
+    data = randn(100)
+    transforms = (IdentityTransformation(), LogTransformation())
+    
+    log_joint = build_log_joint(data, normal_lpdf, transforms)
+    target_model = ModelLogDensity(2, log_joint)
+    
     q_test = [0.5, -0.2]
+    g_buffer = zeros(2)
     
-    ∇logp!(target_model, q_test)
+    ∇logp!(g_buffer, target_model, q_test)
     
-    allocs = @allocated ∇logp!(target_model, q_test)
+    allocs = @allocated ∇logp!(g_buffer, target_model, q_test)
     
-    @info "Allocations in ∇logp!: $allocs bytes"
+    @test allocs == 0
+    
 end
 
 
-@testset "NUTS Inner Loop Type Stability" begin
-    model = TransformedLogDensity(
-        data = randn(5),
-        lpdf = normal_lpdf,
-        transforms = (IdentityTransformation(), LogTransformation()),
-        buffer = zeros(2)
-    )
+@testset "Type Stability All The Way Down" begin
+    @testset "Base Math & Transformations" begin
+        t_id = IdentityTransformation()
+        t_log = LogTransformation()
+        
+        @test (@inferred transform(t_id, 1.5)) isa Real
+        @test (@inferred transform(t_log, 1.5)) isa Real
+        @test (@inferred log_abs_det_jacobian(t_id, 1.5)) isa Real
+        @test (@inferred log_abs_det_jacobian(t_log, 1.5)) isa Real
+        
+        @test (@inferred normal_lpdf(0.5, 0.0, 1.0)) isa Real
+    end
 
-    q = [0.1, 0.2]
-
-    @test @inferred(model(q)) isa Float64
-
-    q_dual = ForwardDiff.Dual.(q, (1.0, 0.0))
+    data = randn(10)
+    transforms = (IdentityTransformation(), LogTransformation())
+    q_test = [0.5, -0.2]
+    g_buffer = zeros(2)
     
-    @test @inferred(model(q_dual)) isa ForwardDiff.Dual
+    @testset "Parameter Processing" begin
+        @test (@inferred process_params(q_test, transforms)) isa Tuple 
+    end
+
+    @testset "Log Joint Closure" begin
+        log_joint = build_log_joint(data, normal_lpdf, transforms)
+        
+        @test (@inferred log_joint(q_test)) isa Real
+    end
+
+    @testset "Enzyme Gradient Wrapper" begin
+        log_joint = build_log_joint(data, normal_lpdf, transforms)
+        target_model = ModelLogDensity(2, log_joint)
+        
+        @test (@inferred ∇logp!(g_buffer, target_model, q_test)) isa Tuple{Real, Bool}
+    end
 end
