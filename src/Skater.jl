@@ -8,7 +8,7 @@ using ForwardDiff
 
 include("lpdfs.jl")
 include("welford.jl")
-
+include("transformed_densities.jl")
 export cholesky
 
 

@@ -3,9 +3,9 @@ using Distributions
 using Skater
 using LinearAlgebra
 using Statistics
-
+using FiniteDifferences 
 using Skater: WelfordState, welford_update!, welford_variance
-
+using Skater: TransformedLogDensity, IdentityTransformation, LogTransformation, ∇logp!, transform, log_abs_det_jacobian, grad_correction,Transformation 
 
 @testset "Log PDF Functions" begin
     @testset "Density Evaluations" begin 
@@ -138,3 +138,71 @@ end;
         @test welford_variance(W) ≈ expected_var rtol=1e-5
     end
 end;
+
+using Test
+using ForwardDiff
+using FiniteDifferences
+
+@testset "ForwardDiff Accuracy vs Finite Differences" begin
+    target_model = TransformedLogDensity(
+        data = randn(100),
+        lpdf = normal_lpdf,
+        transforms = (IdentityTransformation(), LogTransformation()),
+        buffer = zeros(2)
+    )
+
+    q_test = [0.5, -0.2] 
+
+    ∇logp!(target_model, q_test)
+    ad_grad = copy(target_model.buffer)
+
+    fdm = central_fdm(5, 1) # Highly accurate 5-point central difference
+    fd_grad = FiniteDifferences.grad(fdm, target_model, q_test)[1]
+
+    @test ad_grad ≈ fd_grad rtol=1e-6
+end
+
+
+@testset "Jacobian Gradient Correction" begin
+    t = LogTransformation()
+    x = 1.5
+    
+    jac_func(x_val) = log_abs_det_jacobian(t, x_val[1])
+    jac_grad = ForwardDiff.gradient(jac_func, [x])[1]
+    
+    @test jac_grad ≈ 1.0
+end
+
+@testset "AD Gradients Allocations" begin
+    target_model = TransformedLogDensity(
+        data = randn(100),
+        lpdf = normal_lpdf,
+        transforms = (IdentityTransformation(), LogTransformation()), 
+        buffer = zeros(2)
+    )
+    q_test = [0.5, -0.2]
+    
+    ∇logp!(target_model, q_test)
+    
+    allocs = @allocated ∇logp!(target_model, q_test)
+    
+    @info "Allocations in ∇logp!: $allocs bytes"
+end
+
+
+@testset "NUTS Inner Loop Type Stability" begin
+    model = TransformedLogDensity(
+        data = randn(5),
+        lpdf = normal_lpdf,
+        transforms = (IdentityTransformation(), LogTransformation()),
+        buffer = zeros(2)
+    )
+
+    q = [0.1, 0.2]
+
+    @test @inferred(model(q)) isa Float64
+
+    q_dual = ForwardDiff.Dual.(q, (1.0, 0.0))
+    
+    @test @inferred(model(q_dual)) isa ForwardDiff.Dual
+end

@@ -1,1 +1,12 @@
 have errors that lead to rejection of sample return nothing instead of throwing an error. This allows the sampler to continue and potentially find a valid sample in subsequent iterations.
+
+
+
+model = TransformedLogDensity(
+    data = randn(100),
+    lpdf = normal_lpdf,
+    transforms = [IdentityTransformation(), LogTransformation()],
+    buffer = zeros(2)
+)
+
+∇logp!(model, [0.0, 0.0])
