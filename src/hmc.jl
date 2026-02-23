@@ -1,24 +1,5 @@
 ## LEAPFROG INTEGRATOR
 
-using Enzyme
-using Skater
-using Random
-data = randn(10)
-dim = 2
-transforms = (IdentityTransformation(), LogTransformation())
-ℓ = build_log_joint(data, normal_lpdf, transforms)
-
-model = ModelLogDensity(dim, ℓ)
-q = zeros(Float64,dim)
-p = randn(Float64,dim)
-grad = zeros(Float64,dim)
-state = PhaseSpacePoint(q, p, grad)
-
-∇logp!(state.grad, model, state.q)
-allocs = @allocated ∇logp!(state.grad, model, state.q)
-allocs == 0
-
-
 ### Q REPRESENTS THE POSITION IN PHASE SPACE OF THE PARAMETERS, P REPRESENTS THE MOMENTUM OF THE PARAMETERS. IN HMC, SAMPLE MOMENTUM FROM A GAUSSIAN DISTRIBUTION, AND THEN SIMULATE THE DYNAMICS OF THE SYSTEM TO PROPOSE NEW SAMPLES.
 
 function leapfrog!(q, p, g, model, ∇logp!, ϵ = 0.1)
