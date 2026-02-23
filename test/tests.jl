@@ -228,6 +228,6 @@ end
         log_joint = build_log_joint(data, normal_lpdf, transforms)
         target_model = ModelLogDensity(2, log_joint)
         
-        @test (@inferred ∇logp!(g_buffer, target_model, q_test)) isa Tuple{Real, Bool}
-    end
-end
+        @test (@inferred ∇logp!(g_buffer, target_model, q_test)) isa Tuple{Real, Bool};
+    end;
+end;
