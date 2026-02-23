@@ -1,0 +1,39 @@
+module Skater
+
+using SpecialFunctions: loggamma, logbeta
+using PositiveFactorizations: cholesky
+using LinearAlgebra: dot,diag
+using ForwardDiff
+
+
+include("lpdfs.jl")
+include("welford.jl")
+
+export cholesky
+
+
+export multi_normal_cholesky_lpdf,
+       multi_normal_diag_lpdf,
+       normal_lpdf,
+       cauchy_lpdf,
+       exponential_lpdf,
+       gamma_lpdf,
+       poisson_lpdf,
+       binomial_lpdf,
+       beta_binomial_lpdf,
+       weibull_lpdf,
+       neg_binomial_2_lpdf,
+       bernoulli_logit_lpdf,
+       weibull_logsigma_lpdf,
+       categorical_logit_lpdf,
+       weibull_logsigma_lccdf,
+       lognormal_lodf,
+       student_t_lpdf,
+       dirichlet_lpdf,
+       uniform_lpdf,
+       laplace_lpdf,
+       logistic_lpdf,
+       beta_lpdf,
+       lkj_corr_cholesky_lpdf
+
+end # Skater module

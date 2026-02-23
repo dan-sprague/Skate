@@ -1,2 +1,17 @@
+name = "Skater"
+uuid = "d9f16b3c-1d8e-11eb-0a9c-5b1e7cfae1b2"
+license = "MIT"
+version = "0.1.0"
+authors = ["Daniel A. Sprague"]
+description = "Scalable, High Performance Bayesian Inference in Native Julia"
+
 [deps]
 ForwardDiff = "f6369f11-7733-5829-9624-2563aa707210"
+LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
+PositiveFactorizations = "85a6dd25-e78a-55b7-8502-1745935b8125"
+SpecialFunctions = "276daf66-3868-5448-9aa4-cd146d93841b"
+
+[compat]
+LinearAlgebra = "1.12.0"
+PositiveFactorizations = "0.2.4"
+SpecialFunctions = "2.7.1"
