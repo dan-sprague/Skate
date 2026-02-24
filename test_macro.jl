@@ -13,27 +13,24 @@ include("src/lang.jl")
     @constants begin
         N::Int
         K::Int
-        x1::Vector{Float64}
-        x2::Vector{Float64}
+        D::Int
+        x::Matrix{Float64}
     end
 
     @params begin
         theta = param(Vector{Float64}, K; simplex = true)
-        mu1 = param(Vector{Float64}, K, ordered = true)
-        mu2 = param(Vector{Float64}, K)
+        mu = param(Matrix{Float64}, K, D; ordered = 1)
         sigma = param(Float64; lower = 0.0)
     end
 
     @logjoint begin
         target += dirichlet_lpdf(theta, 1.0)
-        target += multi_normal_diag_lpdf(mu1, 0.0, 10.0)
-        target += multi_normal_diag_lpdf(mu2, 0.0, 10.0)
         target += normal_lpdf(sigma, 0.0, 5.0)
-
+        target += multi_normal_diag_lpdf(mu, 0.0, 10.0)
         for i in 1:N
-            target += log_mix(theta) do j
-                normal_lpdf(x1[i], mu1[j], sigma) + normal_lpdf(x2[i], mu2[j], sigma)
-            end
+            target += log_mix(theta, j -> 
+            multi_normal_diag_lpdf(x[i, :], mu[j, :], sigma)
+            )
         end
     end
 end
@@ -41,20 +38,24 @@ end
 
 # ── Generate 2D mixture data ─────────────────────────────────────────────────
 K = 2
+D = 2
 N = 500
-true_mu1 = [-2.0, 2.0]
-true_mu2 = [1.0, -1.0]
+true_mu = [-2.0 1.0; 2.0 -1.0]  # K×D
 true_sigma = 0.5
 
 components = [rand() < 0.5 ? 1 : 2 for _ in 1:N]
-x1_data = [randn() * true_sigma + true_mu1[components[i]] for i in 1:N]
-x2_data = [randn() * true_sigma + true_mu2[components[i]] for i in 1:N]
+x_data = Matrix{Float64}(undef, N, D)
+for i in 1:N
+    for dd in 1:D
+        x_data[i, dd] = randn() * true_sigma + true_mu[components[i], dd]
+    end
+end
 
-d = MixtureModel_DataSet(N=N, K=K, x1=x1_data, x2=x2_data)
+d = MixtureModel_DataSet(N=N, K=K, D=D, x=x_data)
 m = make_mixturemodel(d);
 
 using Test
-@time samples =  sample(m, 1000; ϵ = 0.1, L = 10, warmup = 100)
+@time samples = sample(m, 1000; ϵ = 0.1, L = 10, warmup = 100)
 
 
 # ── Turing comparison ────────────────────────────────────────────────────────
@@ -64,7 +65,7 @@ using FillArrays
 using LinearAlgebra
 using Distributions: MixtureModel, MvNormal
 
-x_turing = hcat([[x1_data[i], x2_data[i]] for i in 1:N]...)  # 2×N matrix
+x_turing = Matrix(x_data')  # D×N matrix
 
 @model function gmm_marginalized(x, ::Val{K}) where {K}
     D, N = size(x)

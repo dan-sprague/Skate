@@ -10,25 +10,46 @@ function _subst_var(ex, var::Symbol, replacement)
 end
 
 """
-Inline `log_mix(weights) do j; body; end` into a closure-free log-sum-exp loop.
-Eliminates the inner closure that causes Enzyme activity analysis issues.
+Extract (weights, params, body) from a `log_mix` call, or `nothing` if not recognized.
+Supports two forms:
+  - `log_mix(weights) do j; body; end`   → Expr(:do, ...)
+  - `log_mix(weights, j -> body)`        → Expr(:call, ..., Expr(:->,...))
+"""
+function _extract_log_mix(ex)
+    # Form 1: do-block
+    if ex.head == :do && length(ex.args) == 2
+        call = ex.args[1]
+        lambda = ex.args[2]
+        if call isa Expr && call.head == :call && call.args[1] == :log_mix &&
+           lambda isa Expr && lambda.head == :->
+            return call.args[2], lambda.args[1], lambda.args[2]
+        end
+    end
+    # Form 2: arrow argument
+    if ex.head == :call && length(ex.args) == 3 && ex.args[1] == :log_mix
+        arrow = ex.args[3]
+        if arrow isa Expr && arrow.head == :->
+            return ex.args[2], arrow.args[1], arrow.args[2]
+        end
+    end
+    return nothing, nothing, nothing
+end
+
+"""
+Inline `log_mix` calls into closure-free log-sum-exp loops.
+Eliminates inner closures that cause Enzyme activity analysis issues.
+
+Supports:
+  - `log_mix(weights) do j; body; end`
+  - `log_mix(weights, j -> body)`
 """
 function _inline_log_mix(ex)
     ex isa Expr || return ex
     # Recurse first
     ex = Expr(ex.head, [_inline_log_mix(a) for a in ex.args]...)
 
-    # Detect: log_mix(weights) do j; body; end
-    # AST: Expr(:do, Expr(:call, :log_mix, weights), Expr(:->, params, body))
-    ex.head == :do && length(ex.args) == 2 || return ex
-    call = ex.args[1]
-    lambda = ex.args[2]
-    call isa Expr && call.head == :call && call.args[1] == :log_mix || return ex
-    lambda isa Expr && lambda.head == :-> || return ex
-
-    weights = call.args[2]
-    params = lambda.args[1]
-    body = lambda.args[2]
+    weights, params, body = _extract_log_mix(ex)
+    weights === nothing && return ex
 
     j = if params isa Symbol
         params
@@ -56,6 +77,36 @@ function _inline_log_mix(ex)
         end
         $acc
     end
+end
+
+"""Check if an expression contains any closure (`->` or `do`) nodes."""
+function _has_closure(ex)
+    ex isa Expr || return false
+    (ex.head == :-> || ex.head == :do) && return true
+    return any(_has_closure, ex.args)
+end
+
+"""Check if an index expression represents a slice (`:` or a range like `1:n`)."""
+_is_slice_index(ex) = ex === :(:) ||
+    (ex isa Expr && ex.head == :call && !isempty(ex.args) && ex.args[1] == :(:))
+
+"""
+Automatically wrap matrix/array slices (e.g. `x[i, :]`) with `view(...)`.
+Existing explicit `@view(...)` calls are preserved as-is.
+"""
+function _auto_view(ex)
+    ex isa Expr || return ex
+    # Preserve explicit @view — don't recurse into it
+    if ex.head == :macrocall && !isempty(ex.args) && ex.args[1] == Symbol("@view")
+        return ex
+    end
+    # Recurse first
+    ex = Expr(ex.head, [_auto_view(a) for a in ex.args]...)
+    # Wrap sliced indexing with view()
+    if ex.head == :ref && length(ex.args) >= 2 && any(_is_slice_index, ex.args[2:end])
+        return Expr(:call, :view, ex.args...)
+    end
+    return ex
 end
 
 """Rewrite bare data-name symbols in an expression to `data.name`."""
@@ -129,7 +180,6 @@ macro spec(model_name::Symbol, body::Expr)
     # No process_params, no transforms tuple — everything emitted directly
     unpack_stmts = Expr[]
     constrain_stmts = Expr[]
-    prealloc_stmts = Expr[]   # allocated once outside the closure
     idx = 1                   # tracks position in flat q vector (Int or Expr)
     dim_expr::Union{Int,Expr} = 0
 
@@ -137,6 +187,8 @@ macro spec(model_name::Symbol, body::Expr)
     _add(a, b) = :($a + $b)
     _sub(a::Int, b::Int) = a - b
     _sub(a, b) = :($a - $b)
+    _mul(a::Int, b::Int) = a * b
+    _mul(a, b) = :($a * $b)
 
     for s in param_specs
         c = s.constraint_expr
@@ -165,11 +217,12 @@ macro spec(model_name::Symbol, body::Expr)
             K = s.sizes[1]  # simplex dimension (K)
             Km1 = _sub(K, 1)  # unconstrained dimension (K-1)
             stop = _sub(_add(idx, Km1), 1)
-            buf_name = Symbol("_simplex_buf_", s.name)
-            push!(prealloc_stmts, :($buf_name = Vector{Float64}(undef, $K)))
+            _x = gensym(:sx)
+            _lj = gensym(:slj)
             push!(unpack_stmts, quote
-                log_jac += simplex_transform!($buf_name, @view q[$idx : $stop])
-                $(s.name) = $buf_name
+                $_x, $_lj = simplex_transform(@view q[$idx : $stop])
+                $(s.name) = $_x
+                log_jac += $_lj
             end)
             push!(constrain_stmts, :($(s.name) = first(simplex_transform(@view q[$idx : $stop]))))
             idx = _add(idx, Km1)
@@ -178,21 +231,86 @@ macro spec(model_name::Symbol, body::Expr)
         elseif s.container == :ordered
             K = s.sizes[1]  # ordered vector dimension (K → K)
             stop = _sub(_add(idx, K), 1)
-            buf_name = Symbol("_ordered_buf_", s.name)
-            push!(prealloc_stmts, :($buf_name = Vector{Float64}(undef, $K)))
+            _x = gensym(:ox)
+            _lj = gensym(:olj)
             push!(unpack_stmts, quote
-                log_jac += ordered_transform!($buf_name, @view q[$idx : $stop])
-                $(s.name) = $buf_name
+                $_x, $_lj = ordered_transform(@view q[$idx : $stop])
+                $(s.name) = $_x
+                log_jac += $_lj
             end)
             push!(constrain_stmts, :($(s.name) = transform(OrderedConstraint(), @view q[$idx : $stop])))
             idx = _add(idx, K)
             dim_expr = _add(dim_expr, K)
+
+        elseif s.container == :matrix
+            K = s.sizes[1]  # rows
+            D = s.sizes[2]  # cols
+            od = s.ordered_dim
+            total = _mul(K, D)
+
+            _mat = gensym(:mat)
+            if od > 0
+                _d_var = gensym(:d)
+                _cs = gensym(:cs)
+                _ce = gensym(:ce)
+                _ox = gensym(:ox)
+                _olj = gensym(:olj)
+
+                push!(unpack_stmts, quote
+                    $_mat = Matrix{Float64}(undef, $K, $D)
+                    for $_d_var in 1:$D
+                        $_cs = $idx + ($_d_var - 1) * $K
+                        $_ce = $_cs + $K - 1
+                        if $_d_var == $od
+                            $_ox, $_olj = ordered_transform(@view q[$_cs : $_ce])
+                            $_mat[:, $_d_var] = $_ox
+                            log_jac += $_olj
+                        else
+                            $_mat[:, $_d_var] .= @view q[$_cs : $_ce]
+                        end
+                    end
+                    $(s.name) = $_mat
+                end)
+
+                push!(constrain_stmts, quote
+                    $_mat = Matrix{Float64}(undef, $K, $D)
+                    for $_d_var in 1:$D
+                        $_cs = $idx + ($_d_var - 1) * $K
+                        $_ce = $_cs + $K - 1
+                        if $_d_var == $od
+                            $_mat[:, $_d_var] = transform(OrderedConstraint(), @view q[$_cs : $_ce])
+                        else
+                            $_mat[:, $_d_var] .= @view q[$_cs : $_ce]
+                        end
+                    end
+                    $(s.name) = $_mat
+                end)
+            else
+                stop = _sub(_add(idx, total), 1)
+                push!(unpack_stmts, :($(s.name) = reshape(@view(q[$idx : $stop]), $K, $D)))
+                push!(constrain_stmts, :($(s.name) = reshape(q[$idx : $stop], $K, $D)))
+            end
+
+            idx = _add(idx, total)
+            dim_expr = _add(dim_expr, total)
         end
     end
 
     make_model_name = Symbol("make_" * lowercase(string(model_name)))
     param_names = Set(s.name for s in param_specs)
-    model_stmts = [_inline_log_mix(_rewrite_data_refs(s, dn, param_names)) for s in _lines(model_blk)]
+    model_stmts = [_inline_log_mix(_auto_view(_rewrite_data_refs(s, dn, param_names))) for s in _lines(model_blk)]
+
+    # Warn about closures that survive inlining — these will break Enzyme
+    for s in model_stmts
+        if _has_closure(s)
+            @warn "[@spec $model_name] Closure detected in @logjoint body after inlining. " *
+                  "Closures that capture both data and parameters will cause " *
+                  "EnzymeRuntimeActivityError. Refactor to avoid closures or " *
+                  "use log_mix(weights) do j; ... end (which is auto-inlined)."
+            break
+        end
+    end
+
     nt_fields = [Expr(:(=), s.name, s.name) for s in param_specs]
 
     out = quote
@@ -204,7 +322,6 @@ macro spec(model_name::Symbol, body::Expr)
             dim = $dim_expr
 
             ℓ = function(q::Vector{Float64})
-                $(prealloc_stmts...)
                 log_jac = 0.0
                 $(unpack_stmts...)
 
@@ -237,8 +354,9 @@ end
 struct _ParamSpec
     name::Symbol
     constraint_expr::Expr   # e.g. :(LowerBounded(0.0))
-    container::Symbol       # :scalar | :vector | :simplex | :matrix
+    container::Symbol       # :scalar | :vector | :simplex | :ordered | :matrix
     sizes::Vector{Any}
+    ordered_dim::Int        # matrix only: 0 = none, N = column N gets ordered constraint
 end
 
 
@@ -253,7 +371,7 @@ function _parse_params(block::Expr,data_names::Set{Symbol})
             var isa Symbol || error(
                 "@params: '$var::$T' — bare annotations only support Float64. " *
                 "For vectors and matrices use param(Vector{Float64}, n, ...)")
-            push!(specs, _ParamSpec(var, :(IdentityConstraint()), :scalar, []))
+            push!(specs, _ParamSpec(var, :(IdentityConstraint()), :scalar, [], 0))
 
         elseif line.head == :(=)
             var = line.args[1]
@@ -304,7 +422,7 @@ function _param_to_spec(name::Symbol, args, dn::Set{Symbol})
     if T == :Float64
         is_simplex && error("@params: simplex not supported for scalars")
         isempty(sz_args) || error("@params: param(Float64) takes no positional size arguments")
-        return _ParamSpec(name, constraint, :scalar, [])
+        return _ParamSpec(name, constraint, :scalar, [], 0)
     end
 
     # Vector or Matrix
@@ -317,20 +435,34 @@ function _param_to_spec(name::Symbol, args, dn::Set{Symbol})
             if is_simplex
                 (lo !== nothing || hi !== nothing) &&
                     error("@params: simplex params cannot have bounds")
-                return _ParamSpec(name, :(SimplexConstraint()), :simplex, [n])
+                return _ParamSpec(name, :(SimplexConstraint()), :simplex, [n], 0)
             end
             if is_ordered
                 (lo !== nothing || hi !== nothing) &&
                     error("@params: ordered params cannot have bounds")
-                return _ParamSpec(name, :(OrderedConstraint()), :ordered, [n])
+                return _ParamSpec(name, :(OrderedConstraint()), :ordered, [n], 0)
             end
-            return _ParamSpec(name, constraint, :vector, [n])
+            return _ParamSpec(name, constraint, :vector, [n], 0)
         elseif base == :Matrix && elem == :Float64
             length(sz_args) == 2 || error("@params: param(Matrix{Float64}, n, m) takes two size arguments")
-            constraint != :(IdentityConstraint()) && error("@params: bounded matrices not supported")
             sz1 = _resolve_size(sz_args[1], dn)
             sz2 = _resolve_size(sz_args[2], dn)
-            return _ParamSpec(name, constraint, :matrix, [sz1, sz2])
+            ordered_col = if is_ordered === false
+                0
+            elseif is_ordered === true
+                1
+            elseif is_ordered isa Integer
+                Int(is_ordered)
+            else
+                error("@params: ordered must be true or a column index (integer)")
+            end
+            if ordered_col > 0 && (lo !== nothing || hi !== nothing)
+                error("@params: ordered matrix columns cannot have bounds")
+            end
+            if ordered_col == 0
+                constraint != :(IdentityConstraint()) && error("@params: bounded matrices not supported")
+            end
+            return _ParamSpec(name, constraint, :matrix, [sz1, sz2], ordered_col)
         end
     end
 

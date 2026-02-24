@@ -96,6 +96,13 @@ function log_abs_det_jacobian(::OrderedConstraint, x::AbstractVector{<:Real})
     sum(@view x[2:end])
 end
 
+function ordered_transform(x::AbstractVector{<:Real})
+    K = length(x)
+    y = Vector{Float64}(undef, K)
+    log_jac = ordered_transform!(y, x)
+    return y, log_jac
+end
+
 function ordered_transform!(y::Vector{Float64}, x::AbstractVector{<:Real})
     y[1] = x[1]
     log_jac = 0.0

@@ -35,6 +35,20 @@ function multi_normal_diag_lpdf(x, μ::Real, σ::Real)
     return -0.5 * ss / (σ_safe * σ_safe) - n * log(σ_safe) - 0.5 * n * log(2π)
 end
 
+# Vector μ, scalar σ — element-wise loop, zero allocations.
+function multi_normal_diag_lpdf(x, μ::AbstractVector, σ::Real)
+    σ <= 0 && return _LOG_ZERO
+    σ_safe = max(σ, eps(Float64))
+    n = length(x)
+    inv_σ2 = 1.0 / (σ_safe * σ_safe)
+    ss = 0.0
+    @inbounds for i in eachindex(x, μ)
+        d = x[i] - μ[i]
+        ss += d * d
+    end
+    return -0.5 * ss * inv_σ2 - n * log(σ_safe) - 0.5 * n * log(2π)
+end
+
 # Vector μ, vector σ — element-wise loop, zero allocations.
 function multi_normal_diag_lpdf(x, μ::AbstractVector, σ::AbstractVector)
     n = length(x)
