@@ -45,7 +45,7 @@ function _dsl_to_julia_type(spec)
 end
 
 
-macro model(model_name::Symbol, body::Expr)
+macro spec(model_name::Symbol, body::Expr)
     body.head == :block || error("@specsheet expects begin...end block")
     data_blk = params_blk = model_blk = nothing
     for expr in body.args
@@ -268,7 +268,7 @@ function _param_to_spec(name::Symbol, args, dn::Set{Symbol})
 end
 
 
-@macroexpand @model Model begin
+@macroexpand @spec Model begin
     @data begin
         N::Int
         x::Vector{Float64}

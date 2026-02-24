@@ -6,14 +6,14 @@ import Base.@kwdef
 
 include("src/lang.jl")
 
-@model MixtureModel begin
-    @data begin
+@spec MixtureModel begin
+    @data begin ## constants and data
         N::Int
         K::Int
         x::Vector{Float64}
     end
 
-    @params begin
+    @params begin ### these parameters will be sampled
         theta = param(Vector{Float64}, K; simplex = true)
         mus = param(Vector{Float64}, K)
         sigma = param(Float64; lower = 0.0)
