@@ -22,14 +22,13 @@ transform(c::UpperBounded, x) = c.ub - exp(x)
 struct Bounded{T} <: Constraint
     lb::T
     ub::T
-    function Bounded(lb::T, ub::T) where T
-        lb isa Real && ub isa Real && lb >= ub &&
-            error("Lower bound must be less than upper bound")
-        new{T}(lb, ub)
+    function Bounded{T}(lb, ub) where T
+        lb >= ub && error("Lower bound must be less than upper bound")
+        new{T}(T(lb), T(ub))
     end
 end
-Bounded(lb, ub) = Bounded(promote(lb, ub)...)
-Bounded(lb::Real, ub::Real) = Bounded{Float64}(Float64(lb), Float64(ub))
+Bounded(lb::T, ub::T) where {T<:Real} = Bounded{T}(lb, ub)
+Bounded(lb, ub) = Bounded{Float64}(Float64(lb), Float64(ub))
 
 _logistic(x) = x >= 0 ? 1.0 / (1.0 + exp(-x)) : exp(x) / (1.0 + exp(x))
 
@@ -109,6 +108,37 @@ function ordered_transform!(y::Vector{Float64}, x::AbstractVector{<:Real})
     for i in 2:length(x)
         y[i] = y[i-1] + exp(x[i])
         log_jac += x[i]
+    end
+    return log_jac
+end
+
+# ── Correlation Cholesky (CPC / tanh parameterization) ───────────────────────
+# Maps D*(D-1)/2 unconstrained reals → D×D lower-triangular Cholesky factor
+# of a correlation matrix (rows have unit norm, so LL^T has ones on diagonal).
+# Uses Canonical Partial Correlations: each z maps through tanh to (-1,1).
+
+function corr_cholesky_transform(z::AbstractVector{<:Real}, D::Int)
+    L = zeros(Float64, D, D)
+    log_jac = corr_cholesky_transform!(L, z, D)
+    return L, log_jac
+end
+
+function corr_cholesky_transform!(L::AbstractMatrix{<:Real}, z::AbstractVector{<:Real}, D::Int)
+    log_jac = 0.0
+    L[1, 1] = 1.0
+    pos = 1
+    for i in 2:D
+        acc = 1.0
+        for j in 1:(i-1)
+            w = tanh(z[pos])
+            L[i, j] = w * sqrt(acc)
+            w2 = w * w
+            log_jac += log(1.0 - w2)       # tanh Jacobian: d(tanh)/dz = 1 - tanh²
+            log_jac += 0.5 * log(acc)       # scaling from sqrt(remaining)
+            acc *= (1.0 - w2)
+            pos += 1
+        end
+        L[i, i] = sqrt(max(acc, 0.0))
     end
     return log_jac
 end

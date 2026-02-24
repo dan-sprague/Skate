@@ -37,6 +37,8 @@ export multi_normal_cholesky_lpdf,
        laplace_lpdf,
        logistic_lpdf,
        beta_lpdf,
-       lkj_corr_cholesky_lpdf
+       lkj_corr_cholesky_lpdf,
+       diag_pre_multiply,
+       corr_cholesky_transform
 
 end # Skater module

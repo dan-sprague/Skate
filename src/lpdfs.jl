@@ -1,5 +1,5 @@
 using SpecialFunctions: loggamma, logbeta
-using LinearAlgebra: dot
+using LinearAlgebra: dot, diag
 const _LOG_ZERO = -Inf
 
 """
@@ -9,20 +9,27 @@ Stan-style log-density for MVN.
 L is the Lower-Triangular Cholesky factor of the covariance matrix.
 """
 function multi_normal_cholesky_lpdf(x, μ, L)
-    if any(i -> L[i, i] <= 0, axes(L, 1))
-        return _LOG_ZERO
+    k = length(x)
+
+    # Forward substitution: solve L*z = (x - μ), accumulate z'z and log|det L|
+    z = Vector{Float64}(undef, k)
+    log_det = 0.0
+    @inbounds for i in 1:k
+        L[i, i] <= 0 && return _LOG_ZERO
+        s = x[i] - μ[i]
+        for j in 1:i-1
+            s -= L[i, j] * z[j]
+        end
+        z[i] = s / L[i, i]
+        log_det += log(L[i, i])
     end
 
-    z = L \ (x .- μ)
-    quad_form = -0.5 * dot(z, z)
+    quad = 0.0
+    @inbounds for i in 1:k
+        quad += z[i] * z[i]
+    end
 
-    # -½ log|Σ|: since Σ = LLᵀ, log|Σ| = 2 Σᵢ log(Lᵢᵢ), so -½ log|Σ| = -Σᵢ log(Lᵢᵢ)
-    neg_half_log_det = -sum(log.(diag(L)))
-
-    k = length(x)
-    const_term = -0.5 * k * log(2π)
-
-    return quad_form + neg_half_log_det + const_term
+    return -0.5 * quad - log_det - 0.5 * k * log(2π)
 end
 
 # Scalar μ, σ — BLAS dot/sum, zero allocations.
@@ -61,6 +68,39 @@ function multi_normal_diag_lpdf(x, μ::AbstractVector, σ::AbstractVector)
         lp -= 0.5 * z * z + log(σ_safe)
     end
     return lp
+end
+
+"""Construct the Cholesky factor of a covariance matrix from scales and correlation Cholesky.
+Equivalent to `Diagonal(sigma) * L_corr`, i.e. `sigma .* L_corr`."""
+diag_pre_multiply(sigma, L) = sigma .* L
+
+"""
+    multi_normal_cholesky_scaled_lpdf(x, μ, log_sigma_row, L_corr)
+
+Fused MVN Cholesky log-density with log-scale parameterization.
+Equivalent to `multi_normal_cholesky_lpdf(x, μ, diag_pre_multiply(exp.(log_sigma), L_corr))`
+but computes `exp()` per-element inline — no broadcast allocation, no `diag_pre_multiply` temp.
+"""
+function multi_normal_cholesky_scaled_lpdf(x, μ, log_sigma_row, L_corr)
+    k = length(x)
+    z = Vector{Float64}(undef, k)
+    log_det = 0.0
+    @inbounds for i in 1:k
+        σi = exp(log_sigma_row[i])
+        Lii = σi * L_corr[i, i]
+        Lii <= 0 && return _LOG_ZERO
+        s = x[i] - μ[i]
+        for j in 1:i-1
+            s -= σi * L_corr[i, j] * z[j]
+        end
+        z[i] = s / Lii
+        log_det += log(Lii)
+    end
+    quad = 0.0
+    @inbounds for i in 1:k
+        quad += z[i] * z[i]
+    end
+    return -0.5 * quad - log_det - 0.5 * k * log(2π)
 end
 
 function normal_lpdf(x, μ, σ)

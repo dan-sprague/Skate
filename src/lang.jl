@@ -151,6 +151,431 @@ function _dsl_to_julia_type(spec)
     return spec
 end
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# @for broadcast-to-loop unrolling
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@enum _ShapeKind _shape_scalar _shape_vector _shape_matrix
+
+struct _ShapeInfo
+    kind::_ShapeKind
+    len::Any        # vector length expr, or nothing
+    ncols::Any      # matrix col count, or nothing
+end
+
+_scalar_shape() = _ShapeInfo(_shape_scalar, nothing, nothing)
+_vector_shape(len) = _ShapeInfo(_shape_vector, len, nothing)
+_matrix_shape(nrows, ncols) = _ShapeInfo(_shape_matrix, nrows, ncols)
+
+"""Build initial shape environment from @params and @constants declarations."""
+function _build_shape_env(param_specs, data_fields)
+    env = Dict{Any, _ShapeInfo}()
+    # Params: keyed by Symbol
+    for s in param_specs
+        if s.container == :scalar
+            env[s.name] = _scalar_shape()
+        elseif s.container in (:vector, :simplex, :ordered)
+            env[s.name] = _vector_shape(s.sizes[1])
+        elseif s.container == :matrix
+            env[s.name] = _matrix_shape(s.sizes[1], s.sizes[2])
+        end
+    end
+    # Data: keyed by :(data.X) since _rewrite_data_refs already ran
+    for f in data_fields
+        f isa Expr && f.head == :(::) || continue
+        var = f.args[1]
+        T = f.args[2]
+        dkey = :(data.$var)
+        if T isa Expr && T.head == :curly
+            base = T.args[1]
+            if base == :Vector
+                env[dkey] = _vector_shape(:(length(data.$var)))
+            elseif base == :Matrix
+                env[dkey] = _matrix_shape(:(size(data.$var, 1)), :(size(data.$var, 2)))
+            else
+                env[dkey] = _scalar_shape()
+            end
+        else
+            env[dkey] = _scalar_shape()
+        end
+    end
+    env
+end
+
+const _DOT_OPS = Set(Symbol[Symbol(".+"), Symbol(".-"), Symbol(".*"), Symbol("./")])
+
+_is_dot_op(s) = s isa Symbol && s in _DOT_OPS
+
+function _undot(op::Symbol)
+    op == Symbol(".+") && return :+
+    op == Symbol(".-") && return :-
+    op == Symbol(".*") && return :*
+    op == Symbol("./") && return :/
+    error("Unknown dot operator: $op")
+end
+
+"""Check if ex is a data.X expression."""
+function _is_data_ref(ex)
+    ex isa Expr && ex.head == :. && length(ex.args) == 2 &&
+        ex.args[1] == :data && ex.args[2] isa QuoteNode
+end
+
+"""Get the :(data.X) key for env lookup from a data reference expression."""
+function _data_key(ex)
+    ex isa Expr && ex.head == :. && ex.args[1] == :data && ex.args[2] isa QuoteNode &&
+        return Expr(:., :data, ex.args[2])
+    return ex
+end
+
+"""Check if an indexing expression is a matrix column slice like X[:, 1:k]."""
+function _is_mat_col_slice(ex, env)
+    ex isa Expr && ex.head == :ref && length(ex.args) == 3 || return false
+    base_shape = _infer_shape(ex.args[1], env)
+    base_shape.kind == _shape_matrix || return false
+    _is_slice_index(ex.args[2]) || return false
+    return true
+end
+
+"""Extract (base, col_start, col_stop) from M[:, start:stop]."""
+function _mat_slice_parts(ex)
+    base = ex.args[1]
+    col_idx = ex.args[3]
+    if col_idx isa Expr && col_idx.head == :call && col_idx.args[1] == :(:)
+        return base, col_idx.args[2], col_idx.args[3]
+    end
+    # M[:, k] — single column
+    return base, col_idx, col_idx
+end
+
+"""Recursive shape inference for expressions."""
+function _infer_shape(ex, env::Dict{Any, _ShapeInfo})
+    # Literals
+    ex isa Number && return _scalar_shape()
+
+    # Symbols (params, locals)
+    if ex isa Symbol
+        haskey(env, ex) && return env[ex]
+        return _scalar_shape()
+    end
+
+    ex isa Expr || return _scalar_shape()
+
+    # data.X reference
+    if _is_data_ref(ex)
+        key = _data_key(ex)
+        haskey(env, key) && return env[key]
+        return _scalar_shape()
+    end
+
+    # Dot-call: f.(args...)
+    if ex.head == :. && length(ex.args) == 2 &&
+       ex.args[2] isa Expr && ex.args[2].head == :tuple
+        for a in ex.args[2].args
+            s = _infer_shape(a, env)
+            s.kind == _shape_vector && return s
+        end
+        return _scalar_shape()
+    end
+
+    if ex.head == :call
+        op = ex.args[1]
+        operands = ex.args[2:end]
+
+        # Dot operators
+        if _is_dot_op(op)
+            for a in operands
+                s = _infer_shape(a, env)
+                s.kind == _shape_vector && return s
+            end
+            return _scalar_shape()
+        end
+
+        # Non-dot *: matrix-vector product
+        if op == :* && length(operands) == 2
+            s1 = _infer_shape(operands[1], env)
+            s2 = _infer_shape(operands[2], env)
+            # Full matrix * vector
+            if s1.kind == _shape_matrix && s2.kind == _shape_vector
+                return _vector_shape(s1.len)   # nrows stored in .len for matrix
+            end
+            # Sliced matrix * vector: check if first operand is M[:, 1:k]
+            if _is_mat_col_slice(operands[1], env) && s2.kind == _shape_vector
+                base = operands[1].args[1]
+                base_shape = _infer_shape(base, env)
+                return _vector_shape(base_shape.len)  # nrows of base matrix
+            end
+            # scalar * vector or vector * scalar
+            if s1.kind == _shape_vector return s1 end
+            if s2.kind == _shape_vector return s2 end
+            return _scalar_shape()
+        end
+
+        # sum → scalar
+        op == :sum && return _scalar_shape()
+
+        # Other calls: propagate vector shape from args
+        for a in operands
+            s = _infer_shape(a, env)
+            s.kind == _shape_vector && return s
+        end
+        return _scalar_shape()
+    end
+
+    # Indexing: v[idx] or M[i, j]
+    if ex.head == :ref
+        base = ex.args[1]
+        base_shape = _infer_shape(base, env)
+        indices = ex.args[2:end]
+
+        # Vector with single index
+        if base_shape.kind == _shape_vector && length(indices) == 1
+            idx_shape = _infer_shape(indices[1], env)
+            if idx_shape.kind == _shape_vector
+                return _vector_shape(idx_shape.len)  # fancy indexing
+            end
+            return _scalar_shape()
+        end
+
+        # Matrix column slice: M[:, 1:k] → still a matrix (for * purposes)
+        if base_shape.kind == _shape_matrix && length(indices) == 2
+            if _is_slice_index(indices[1])
+                return _matrix_shape(base_shape.len, nothing)
+            end
+        end
+    end
+
+    return _scalar_shape()
+end
+
+"""Core: scalarize a broadcast expression for loop index `idx`."""
+function _scalarize(ex, idx::Symbol, env::Dict{Any, _ShapeInfo}, preamble::Vector{Expr})
+    shape = _infer_shape(ex, env)
+
+    # Scalar passthrough
+    if shape.kind == _shape_scalar
+        return ex
+    end
+
+    # Vector symbol → sym[idx]
+    if ex isa Symbol && shape.kind == _shape_vector
+        return :($ex[$idx])
+    end
+
+    ex isa Expr || return ex
+
+    # data.X vector → data.X[idx]
+    if _is_data_ref(ex) && shape.kind == _shape_vector
+        return :($ex[$idx])
+    end
+
+    # Dot operators: .+ → +, etc.
+    if ex.head == :call && _is_dot_op(ex.args[1])
+        scalar_op = _undot(ex.args[1])
+        s_args = [_scalarize(a, idx, env, preamble) for a in ex.args[2:end]]
+        return Expr(:call, scalar_op, s_args...)
+    end
+
+    # Dot-call: f.(args...) → f(scalarized_args...)
+    if ex.head == :. && length(ex.args) == 2 &&
+       ex.args[2] isa Expr && ex.args[2].head == :tuple
+        f = ex.args[1]
+        s_args = [_scalarize(a, idx, env, preamble) for a in ex.args[2].args]
+        return Expr(:call, f, s_args...)
+    end
+
+    # Matrix-vector product
+    if ex.head == :call && ex.args[1] == :* && length(ex.args) == 3
+        mat_ex, vec_ex = ex.args[2], ex.args[3]
+
+        # Sliced matrix: M[:, start:stop] * v
+        if _is_mat_col_slice(mat_ex, env)
+            mat_base, col_start, col_stop = _mat_slice_parts(mat_ex)
+            dot_var = gensym(:dot)
+            j_var = gensym(:j)
+            push!(preamble, quote
+                $dot_var = 0.0
+                for $j_var in $col_start:$col_stop
+                    $dot_var += $mat_base[$idx, $j_var] * $vec_ex[$j_var]
+                end
+            end)
+            return dot_var
+        end
+
+        # Full matrix * vector
+        mat_shape = _infer_shape(mat_ex, env)
+        vec_shape = _infer_shape(vec_ex, env)
+        if mat_shape.kind == _shape_matrix && vec_shape.kind == _shape_vector
+            dot_var = gensym(:dot)
+            j_var = gensym(:j)
+            ncols = mat_shape.ncols
+            push!(preamble, quote
+                $dot_var = 0.0
+                for $j_var in 1:$ncols
+                    $dot_var += $mat_ex[$idx, $j_var] * $vec_ex[$j_var]
+                end
+            end)
+            return dot_var
+        end
+    end
+
+    # Fancy indexing: v[idx_vec] → v[idx_vec[idx]]
+    if ex.head == :ref && length(ex.args) == 2
+        base = ex.args[1]
+        index = ex.args[2]
+        base_shape = _infer_shape(base, env)
+        idx_shape = _infer_shape(index, env)
+        if base_shape.kind == _shape_vector && idx_shape.kind == _shape_vector
+            return :($base[$index[$idx]])
+        end
+    end
+
+    # Fallback: recurse into args
+    new_args = [_scalarize(a, idx, env, preamble) for a in ex.args]
+    return Expr(ex.head, new_args...)
+end
+
+"""Expand a single @for assignment: `@for y = broadcast_expr`."""
+function _expand_for_assign(stmt, env)
+    lhs = stmt.args[1]
+    rhs = stmt.args[2]
+    shape = _infer_shape(rhs, env)
+    len_expr = shape.len
+
+    idx = gensym(:i)
+    preamble = Expr[]
+    body = _scalarize(rhs, idx, env, preamble)
+
+    env[lhs] = _vector_shape(len_expr)
+
+    return quote
+        $lhs = Vector{Float64}(undef, $len_expr)
+        for $idx in 1:$len_expr
+            $(preamble...)
+            $lhs[$idx] = $body
+        end
+    end
+end
+
+"""Expand a fused @for block: multiple assignments in one loop."""
+function _expand_for_block(block, env)
+    stmts = _lines(block)
+    isempty(stmts) && return block
+
+    # Determine shared loop dimension from first vector-producing statement
+    len_expr = nothing
+    for s in stmts
+        s isa Expr && s.head == :(=) || continue
+        shape = _infer_shape(s.args[2], env)
+        if shape.kind == _shape_vector && shape.len !== nothing
+            len_expr = shape.len
+            break
+        end
+    end
+    len_expr === nothing && error("@for block: could not infer loop dimension")
+
+    idx = gensym(:i)
+    allocs = Expr[]
+    loop_body = Expr[]
+
+    for s in stmts
+        s isa Expr && s.head == :(=) || continue
+        lhs = s.args[1]
+        rhs = s.args[2]
+
+        shape = _infer_shape(rhs, env)
+        if shape.kind == _shape_vector
+            push!(allocs, :($lhs = Vector{Float64}(undef, $len_expr)))
+            preamble = Expr[]
+            body = _scalarize(rhs, idx, env, preamble)
+            append!(loop_body, preamble)
+            push!(loop_body, :($lhs[$idx] = $body))
+            env[lhs] = _vector_shape(len_expr)
+        else
+            # Scalar assignment inside block — just emit it per-iteration
+            push!(loop_body, s)
+        end
+    end
+
+    return quote
+        $(allocs...)
+        for $idx in 1:$len_expr
+            $(loop_body...)
+        end
+    end
+end
+
+"""Expand `@for target += sum(broadcast_expr)`."""
+function _expand_for_sum(stmt, env)
+    # stmt is: target += sum(broadcast_expr)
+    rhs = stmt.args[2]   # sum(broadcast_expr)
+    inner = rhs.args[2]  # the broadcast expression inside sum()
+
+    shape = _infer_shape(inner, env)
+    len_expr = shape.len
+
+    idx = gensym(:i)
+    preamble = Expr[]
+    body = _scalarize(inner, idx, env, preamble)
+
+    return quote
+        for $idx in 1:$len_expr
+            $(preamble...)
+            target += $body
+        end
+    end
+end
+
+"""Check if an expression is `target += sum(vector_expr)`."""
+function _is_target_sum(ex, env)
+    ex isa Expr || return false
+    ex.head == :(+=) || return false
+    ex.args[1] == :target || return false
+    rhs = ex.args[2]
+    rhs isa Expr && rhs.head == :call && rhs.args[1] == :sum || return false
+    inner_shape = _infer_shape(rhs.args[2], env)
+    return inner_shape.kind == _shape_vector
+end
+
+"""Walk statement list, expand @for annotations, maintain shape env."""
+function _expand_for_annotations(stmts, param_specs, data_fields)
+    env = _build_shape_env(param_specs, data_fields)
+    output = Expr[]
+
+    for s in stmts
+        s isa Expr || (push!(output, s); continue)
+
+        # Detect @for macrocall
+        if s.head == :macrocall && !isempty(s.args) && s.args[1] == Symbol("@for")
+            # Get the body (skip LineNumberNode args)
+            body_args = filter(a -> !(a isa LineNumberNode), s.args[2:end])
+            isempty(body_args) && (push!(output, s); continue)
+            body = body_args[1]
+
+            if body isa Expr && body.head == :block
+                # Fused block: @for begin ... end
+                push!(output, _expand_for_block(body, env))
+            elseif body isa Expr && body.head == :(=)
+                # Single assignment: @for y = expr
+                push!(output, _expand_for_assign(body, env))
+            elseif body isa Expr && body.head == :(+=) && _is_target_sum(body, env)
+                # Sum-reduction: @for target += sum(f.(args...))
+                push!(output, _expand_for_sum(body, env))
+            else
+                # Unknown form — pass through unchanged
+                push!(output, body)
+            end
+        else
+            push!(output, s)
+            # Track scalar/vector assignments for env
+            if s.head == :(=) && s.args[1] isa Symbol
+                env[s.args[1]] = _infer_shape(s.args[2], env)
+            end
+        end
+    end
+    output
+end
+
+# ═══════════════════════════════════════════════════════════════════════════════
 
 macro spec(model_name::Symbol, body::Expr)
     body.head == :block || error("@specsheet expects begin...end block")
@@ -189,6 +614,8 @@ macro spec(model_name::Symbol, body::Expr)
     _sub(a, b) = :($a - $b)
     _mul(a::Int, b::Int) = a * b
     _mul(a, b) = :($a * $b)
+    _div(a::Int, b::Int) = div(a, b)
+    _div(a, b) = :(div($a, $b))
 
     for s in param_specs
         c = s.constraint_expr
@@ -293,12 +720,65 @@ macro spec(model_name::Symbol, body::Expr)
 
             idx = _add(idx, total)
             dim_expr = _add(dim_expr, total)
+
+        elseif s.container == :chol_corr
+            D = s.sizes[1]
+            n_free = _div(_mul(D, _sub(D, 1)), 2)  # D*(D-1)/2
+            stop = _sub(_add(idx, n_free), 1)
+            _x = gensym(:ccl)
+            _lj = gensym(:cclj)
+            push!(unpack_stmts, quote
+                $_x, $_lj = corr_cholesky_transform(@view(q[$idx : $stop]), $D)
+                $(s.name) = $_x
+                log_jac += $_lj
+            end)
+            push!(constrain_stmts, :($(s.name) = first(corr_cholesky_transform(@view(q[$idx : $stop]), $D))))
+            idx = _add(idx, n_free)
+            dim_expr = _add(dim_expr, n_free)
+
+        elseif s.container == :chol_corr_batch
+            K = s.sizes[1]
+            D = s.sizes[2]
+            per_elem = _div(_mul(D, _sub(D, 1)), 2)  # D*(D-1)/2 per factor
+            total = _mul(K, per_elem)
+
+            _arr = gensym(:cca)
+            _k = gensym(:cck)
+            _cs = gensym(:ccstart)
+            _ce = gensym(:ccend)
+            _lj = gensym(:cclj)
+
+            push!(unpack_stmts, quote
+                $_arr = zeros(Float64, $D, $D, $K)
+                for $_k in 1:$K
+                    $_cs = $idx + ($_k - 1) * $per_elem
+                    $_ce = $_cs + $per_elem - 1
+                    $_lj = corr_cholesky_transform!(@view($_arr[:, :, $_k]), @view(q[$_cs : $_ce]), $D)
+                    log_jac += $_lj
+                end
+                $(s.name) = $_arr
+            end)
+
+            push!(constrain_stmts, quote
+                $_arr = zeros(Float64, $D, $D, $K)
+                for $_k in 1:$K
+                    $_cs = $idx + ($_k - 1) * $per_elem
+                    $_ce = $_cs + $per_elem - 1
+                    corr_cholesky_transform!(@view($_arr[:, :, $_k]), @view(q[$_cs : $_ce]), $D)
+                end
+                $(s.name) = $_arr
+            end)
+
+            idx = _add(idx, total)
+            dim_expr = _add(dim_expr, total)
         end
     end
 
     make_model_name = Symbol("make_" * lowercase(string(model_name)))
     param_names = Set(s.name for s in param_specs)
-    model_stmts = [_inline_log_mix(_auto_view(_rewrite_data_refs(s, dn, param_names))) for s in _lines(model_blk)]
+    raw_stmts = [_rewrite_data_refs(s, dn, param_names) for s in _lines(model_blk)]
+    expanded_stmts = _expand_for_annotations(raw_stmts, param_specs, data_fields)
+    model_stmts = [_inline_log_mix(_auto_view(s)) for s in expanded_stmts]
 
     # Warn about closures that survive inlining — these will break Enzyme
     for s in model_stmts
@@ -463,6 +943,25 @@ function _param_to_spec(name::Symbol, args, dn::Set{Symbol})
                 constraint != :(IdentityConstraint()) && error("@params: bounded matrices not supported")
             end
             return _ParamSpec(name, constraint, :matrix, [sz1, sz2], ordered_col)
+        end
+    end
+
+    # CholCorr — correlation Cholesky factor(s)
+    if T == :CholCorr
+        (lo !== nothing || hi !== nothing) &&
+            error("@params: CholCorr params cannot have bounds")
+        is_simplex && error("@params: simplex not supported for CholCorr")
+        is_ordered !== false && error("@params: ordered not supported for CholCorr")
+
+        if length(sz_args) == 1
+            D = _resolve_size(sz_args[1], dn)
+            return _ParamSpec(name, :(IdentityConstraint()), :chol_corr, [D], 0)
+        elseif length(sz_args) == 2
+            K = _resolve_size(sz_args[1], dn)
+            D = _resolve_size(sz_args[2], dn)
+            return _ParamSpec(name, :(IdentityConstraint()), :chol_corr_batch, [K, D], 0)
+        else
+            error("@params: param(CholCorr, ...) takes 1 (D) or 2 (K, D) size arguments")
         end
     end
 
