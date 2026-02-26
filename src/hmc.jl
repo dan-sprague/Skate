@@ -107,7 +107,7 @@ function compute_p_sharp!(out,p,inv_metric)
 end
 
 function check_uturn(ρ, p_sharp_start, p_sharp_end)
-    dot(ρ, p_sharp_start) < 0 || dot(ρ, p_sharp_end) < 0
+    dot(ρ, p_sharp_start) > 0 && dot(ρ, p_sharp_end) > 0
 end
 
 struct TreeScratch
@@ -133,13 +133,49 @@ function TreeScratch(dim::Int)
 end
 
 
+function build_tree!(rng, z::PhaseSpacePoint, z_propose::PhaseSpacePoint,
+    p_sharp_beg, p_sharp_end, ρ, p_beg, p_end,
+    depth, direction, ϵ, inv_metric, model, ∇!, H0, max_deltaH,
+    scratch, log_sum_weight, sum_metro_prob, n_leapfrog, divergent)
+
+    if depth == 0
+        lp, ok = leapfrog!(z.q, z.p, z.g, model, direction * ϵ, inv_metric, ∇!)
+        n_leapfrog[] += 1
+
+        z.V[] = ok ? -lp : Inf
+        H = z.V[] + kinetic_energy(z.p, inv_metric)
+        isnan(H) && (H = Inf)
+
+        if (H - H0) > max_deltaH
+            divergent[] = true
+        end
+
+        log_sum_weight[] = logsumexp(log_sum_weight[], H0 - H)
+        sum_metro_prob[] += H0 - H > 0 ? 1.0 : exp(H0 - H)
+
+        z_propose.q .= z.q
+        z_propose.p .= z.p
+        z_propose.g .= z.g
+        z_propose.V[] = z.V[]
+
+        compute_p_sharp!(p_sharp_beg, z.p, inv_metric)
+        p_sharp_end .= p_sharp_beg
+
+        ρ .+= z.p
+        p_beg .= z.p
+        p_end .= z.p
+
+        return !divergent[]
+    end
+end
+
+
 ## One HMC transition.  Returns (α, divergent).
-function _hmc_step!(HMC, model, ϵ, max_depth, ∇!)
+function _hmc_step!(HMC, model, ϵ, max_depth, ∇!,scratch)
     randn!(HMC.curr.p)
     HMC.proposal.q .= HMC.curr.q
     HMC.proposal.p .= HMC.curr.p
 
-    scratch = [TreeScratch(model.dim) for _ in 1:max_depth]
 
     lp₀, ok = ∇!(HMC.grad, model, HMC.proposal.q)
     if !ok
@@ -213,14 +249,9 @@ function _make_grad(model; ad = :auto)
 end
 
 """Run a single chain: warmup + sampling. Returns (raw_samples::Matrix, n_divergent)."""
-function _run_chain(model, num_samples, ϵ, L, warmup, ∇!; chain_id = 1, quiet = false)
+function _run_chain(model, num_samples, ϵ, max_depth, warmup, ∇!; chain_id = 1, quiet = false)
     dim = model.dim
-
-    HMC = HMCState(
-        PhaseSpacePoint(zeros(Float64, dim), zeros(Float64, dim)),
-        PhaseSpacePoint(zeros(Float64, dim), zeros(Float64, dim)),
-        zeros(Float64, dim)
-    )
+    scratch = [TreeScratch(dim) for _ in 1:max_depth]
 
     ## ── Warmup ──
     if !quiet
@@ -232,7 +263,7 @@ function _run_chain(model, num_samples, ϵ, L, warmup, ∇!; chain_id = 1, quiet
     ϵ_curr = Float64(ϵ)
     n_warmup_div = 0
     for i in 1:warmup
-        α, div = _hmc_step!(HMC, model, ϵ_curr, L, ∇!)
+        α, div = _hmc_step!(HMC, model, ϵ_curr, max_depth, ∇!,scratch)
         n_warmup_div += div
         ϵ_curr = adapt!(da, α)
     end
@@ -251,7 +282,7 @@ function _run_chain(model, num_samples, ϵ, L, warmup, ∇!; chain_id = 1, quiet
     n_divergent = 0
     progress_interval = max(1, num_samples ÷ 10)
     @inbounds for i in 1:num_samples
-        _, div = _hmc_step!(HMC, model, ϵ_adapted, L, ∇!)
+        _, div = _hmc_step!(HMC, model, ϵ_adapted, max_depth, ∇!,scratch)
         n_divergent += div
         raw[:, i] .= HMC.curr.q
         if !quiet && i % progress_interval == 0
@@ -266,14 +297,13 @@ function _run_chain(model, num_samples, ϵ, L, warmup, ∇!; chain_id = 1, quiet
     return raw, n_divergent
 end
 
-function sample(model, num_samples; ϵ = 0.1, L = 10, warmup = 1000, ad = :auto, chains = 4)
+function sample(model, num_samples; ϵ = 0.1, max_depth = 10, warmup = 1000, ad = :auto, chains = 4)
     ∇! = _make_grad(model; ad)
 
     printstyled("~  Sampling "; color=:cyan, bold=true)
     printstyled("$chains chain(s) × $num_samples samples"; color=:white, bold=true)
-    printstyled("  L=$L\n"; color=:cyan)
-
-    tasks = [Threads.@spawn _run_chain(model, num_samples, ϵ, L, warmup, ∇!;
+    printstyled("  max_depth=$max_depth\n"; color=:cyan)
+    tasks = [Threads.@spawn _run_chain(model, num_samples, ϵ, max_depth,warmup, ∇!;
                                         chain_id=c, quiet=true)
              for c in 1:chains]
 
