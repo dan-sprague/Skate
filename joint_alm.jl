@@ -1,18 +1,9 @@
 # Joint ALM Model — @for syntax
 # Uses @for broadcast-to-loop unrolling for readable, zero-allocation regression blocks.
-
-include("src/bijections.jl")
-include("src/utilities.jl")
-include("src/logdensitygenerator.jl")
-include("src/lpdfs.jl")
-include("src/hmc.jl")
-import Enzyme
-import Base.@kwdef
+using Pkg; Pkg.activate(@__DIR__)
+using Skate
 using Random
-include("src/lang.jl")
-
 using Distributions
-
 # ─────────────────────────────────────────────────────────────────────────────
 # Model definition
 # ─────────────────────────────────────────────────────────────────────────────
@@ -247,12 +238,12 @@ m = make_jointalm(d)
 println("\nJoint ALM Model — dim=$(m.dim)")
 
 q_test = randn(m.dim)
-lp = m.ℓ(q_test)
+lp = log_prob(m, q_test)
 println("Test log_prob = $(round(lp; sigdigits=4))")
 @assert isfinite(lp) "log_prob is not finite at test point"
 
-println("\nSampling 1000 draws (500 warmup)...")
-@time samples = sample(m, 1000; ϵ=0.1, L=10, warmup=500);
+println("\nSampling 10000 draws (500 warmup)...")
+@time samples = Skate.sample(m, 10000; ϵ=0.1, L=10, warmup=500,chains=4);
 println("Done — $(length(samples)) draws\n")
 
 # ─────────────────────────────────────────────────────────────────────────────

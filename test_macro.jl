@@ -1,13 +1,6 @@
-include("src/bijections.jl")
-include("src/utilities.jl")
-include("src/logdensitygenerator.jl")
-include("src/lpdfs.jl")
-include("src/hmc.jl")
-
-import Enzyme
-import Base.@kwdef
+using Pkg; Pkg.activate(@__DIR__)
+using Skate
 using Random
-include("src/lang.jl")
 
 @spec MixtureModel begin
     @constants begin
@@ -55,7 +48,9 @@ d = MixtureModel_DataSet(N=N, K=K, D=D, x=x_data)
 m = make_mixturemodel(d);
 
 using Test
-@time samples = sample(m, 1000; ϵ = 0.1, L = 10, warmup = 100)
+@time ch = sample(m, 1000;
+ϵ = 0.1, L = 10, warmup = 100, chains = 4,
+ad = :forward)
 
 
 # ── Full-covariance mixture model (Stan-style Cholesky parameterization) ─────
@@ -85,7 +80,7 @@ using Test
         end
         for n in 1:N
             target += log_mix(theta, k ->
-                multi_normal_cholesky_scaled_lpdf(x[n,:], mu[k,:], log_sigma[k,:], L_Omega[:,:,k])
+                multi_normal_cholesky_scaled_lpdf(x[n,:], mu[k,:], log_sigma[k,:], L_Omega[:,:,k]) # @view is auto applied :) 
             )
         end
     end
@@ -120,11 +115,11 @@ expected_dim = (K_fc - 1) + K_fc * D_fc + K_fc * div(D_fc * (D_fc - 1), 2) + K_f
 
 # Verify log-prob evaluates without error
 q_test = randn(m_fc.dim)
-lp = m_fc.ℓ(q_test)
+lp = m_fc.ℓ(q_test, m_fc.data)
 @test isfinite(lp)
 
 # Verify constrain returns valid structure
-c = m_fc.constrain(q_test)
+c = m_fc.constrain(q_test, m_fc.data)
 @test haskey(c, :L_Omega)
 @test size(c.L_Omega) == (D_fc, D_fc, K_fc)
 # Each slice should be lower-triangular with positive diagonal
@@ -144,15 +139,13 @@ for k in 1:K_fc
 end
 
 println("Full-covariance mixture model: dim=$(m_fc.dim), log_prob=$(round(lp, digits=2))")
-@time samples_fc = sample(m_fc, 2000; ϵ = 0.05, L = 10, warmup = 500)
+@time ch_fc = sample(m_fc, 2000; ϵ = 0.05, L = 10, warmup = 500)
 
 # ── Verify FullCovMixture posterior recovers truth ────────────────────────────
 using LinearAlgebra
 
-n_samp = length(samples_fc)
-
 # Posterior mean of mu (K×D)
-mu_mean = sum(s.mu for s in samples_fc) ./ n_samp
+mu_mean = mean(ch_fc, :mu)
 println("Posterior mean mu:\n", round.(mu_mean; digits=3))
 println("True mu:\n", true_mu_fc)
 for k in 1:K_fc, d in 1:D_fc
@@ -160,20 +153,24 @@ for k in 1:K_fc, d in 1:D_fc
 end
 
 # Posterior mean of theta
-theta_mean = sum(s.theta for s in samples_fc) ./ n_samp
+theta_mean = mean(ch_fc, :theta)
 println("Posterior mean theta: ", round.(theta_mean; digits=3))
 @test abs(theta_mean[1] - 0.5) < 0.15
 @test abs(theta_mean[2] - 0.5) < 0.15
 
 # Reconstruct L_Sigma = diag(exp(log_sigma[k,:])) * L_Omega[:,:,k] and compare to true_L
+# (this needs raw samples since it's a nonlinear transform)
+log_sigma_samp = samples(ch_fc, :log_sigma)   # (nsamples, K, D, nchains)
+L_Omega_samp   = samples(ch_fc, :L_Omega)     # (nsamples, D, D, K, nchains)
+ns, nc = size(ch_fc.data, 1), size(ch_fc.data, 3)
 L_Sigma_mean = zeros(D_fc, D_fc, K_fc)
-for s in samples_fc
+for c in 1:nc, i in 1:ns
     for k in 1:K_fc
-        sigma_k = exp.(s.log_sigma[k, :])
-        L_Sigma_mean[:, :, k] .+= sigma_k .* s.L_Omega[:, :, k]
+        sigma_k = exp.(log_sigma_samp[i, k, :, c])
+        L_Sigma_mean[:, :, k] .+= sigma_k .* L_Omega_samp[i, :, :, k, c]
     end
 end
-L_Sigma_mean ./= n_samp
+L_Sigma_mean ./= (ns * nc)
 
 println("Posterior mean L_Sigma[:,:,1]:\n", round.(L_Sigma_mean[:,:,1]; digits=3))
 println("True L[:,:,1]:\n", true_L[:,:,1])

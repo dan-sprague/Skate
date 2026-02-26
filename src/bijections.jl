@@ -2,8 +2,8 @@ abstract type Constraint end
 
 struct IdentityConstraint <: Constraint end
 transform(::IdentityConstraint, x) = x
-log_abs_det_jacobian(::IdentityConstraint, x) = 0.0
-grad_correction(::IdentityConstraint, x) = 1.0
+log_abs_det_jacobian(::IdentityConstraint, x) = zero(typeof(x))
+grad_correction(::IdentityConstraint, x) = one(typeof(x))
 
 # ── ExpBijection family: shared Jacobian and grad_correction ──────────────────
 abstract type ExpBijection <: Constraint end
@@ -30,7 +30,8 @@ end
 Bounded(lb::T, ub::T) where {T<:Real} = Bounded{T}(lb, ub)
 Bounded(lb, ub) = Bounded{Float64}(Float64(lb), Float64(ub))
 
-_logistic(x) = x >= 0 ? 1.0 / (1.0 + exp(-x)) : exp(x) / (1.0 + exp(x))
+# Branchless logistic — IEEE-754 safe: exp(-large_neg)=Inf, inv(1+Inf)=0.0
+_logistic(x) = inv(one(x) + exp(-x))
 
 function transform(c::Bounded, x)
     s = _logistic(x)
@@ -39,12 +40,12 @@ end
 
 function log_abs_det_jacobian(c::Bounded, x)
     s = _logistic(x)
-    log(c.ub - c.lb) + log(s) + log(1.0 - s)
+    log(c.ub - c.lb) + log(s) + log(one(s) - s)
 end
 
 function grad_correction(c::Bounded, x)
     s = _logistic(x)
-    (c.ub - c.lb) * s * (1.0 - s)
+    (c.ub - c.lb) * s * (one(s) - s)
 end
 
 # ── Simplex (stick-breaking transform) ───────────────────────────────────────
@@ -57,21 +58,22 @@ struct SimplexConstraint <: Constraint end
 function simplex_transform(y::AbstractVector{<:Real})
     Km1 = length(y)
     K = Km1 + 1
-    x = Vector{Float64}(undef, K)
+    x = similar(y, K)
     log_jac = simplex_transform!(x, y)
     return x, log_jac
 end
 
-function simplex_transform!(x::Vector{Float64}, y::AbstractVector{<:Real})
+function simplex_transform!(x::AbstractVector{<:Real}, y::AbstractVector{<:Real})
     Km1 = length(y)
     K = Km1 + 1
-    log_jac = 0.0
-    remaining = 1.0
+    T = eltype(y)
+    log_jac = zero(T)
+    remaining = one(T)
 
     for k in 1:Km1
-        z = _logistic(y[k] - log(K - k))
+        z = _logistic(y[k] - log(T(K - k)))
         x[k] = z * remaining
-        log_jac += log(z) + log(1.0 - z) + log(remaining)
+        log_jac += log(z) + log(one(T) - z) + log(remaining)
         remaining -= x[k]
     end
     x[K] = remaining
@@ -83,7 +85,7 @@ end
 struct OrderedConstraint <: Constraint end
 
 function transform(::OrderedConstraint, x::AbstractVector{<:Real})
-    y = similar(x, Float64)
+    y = similar(x)
     y[1] = x[1]
     for i in 2:lastindex(x)
         y[i] = y[i-1] + exp(x[i])
@@ -97,14 +99,14 @@ end
 
 function ordered_transform(x::AbstractVector{<:Real})
     K = length(x)
-    y = Vector{Float64}(undef, K)
+    y = similar(x)
     log_jac = ordered_transform!(y, x)
     return y, log_jac
 end
 
-function ordered_transform!(y::Vector{Float64}, x::AbstractVector{<:Real})
+function ordered_transform!(y::AbstractVector{<:Real}, x::AbstractVector{<:Real})
     y[1] = x[1]
-    log_jac = 0.0
+    log_jac = zero(eltype(x))
     for i in 2:length(x)
         y[i] = y[i-1] + exp(x[i])
         log_jac += x[i]
@@ -118,27 +120,29 @@ end
 # Uses Canonical Partial Correlations: each z maps through tanh to (-1,1).
 
 function corr_cholesky_transform(z::AbstractVector{<:Real}, D::Int)
-    L = zeros(Float64, D, D)
+    T = eltype(z)
+    L = zeros(T, D, D)
     log_jac = corr_cholesky_transform!(L, z, D)
     return L, log_jac
 end
 
 function corr_cholesky_transform!(L::AbstractMatrix{<:Real}, z::AbstractVector{<:Real}, D::Int)
-    log_jac = 0.0
-    L[1, 1] = 1.0
+    T = promote_type(eltype(L), eltype(z))
+    log_jac = zero(T)
+    L[1, 1] = one(T)
     pos = 1
     for i in 2:D
-        acc = 1.0
+        acc = one(T)
         for j in 1:(i-1)
             w = tanh(z[pos])
             L[i, j] = w * sqrt(acc)
             w2 = w * w
-            log_jac += log(1.0 - w2)       # tanh Jacobian: d(tanh)/dz = 1 - tanh²
-            log_jac += 0.5 * log(acc)       # scaling from sqrt(remaining)
-            acc *= (1.0 - w2)
+            log_jac += log(one(T) - w2)       # tanh Jacobian: d(tanh)/dz = 1 - tanh²
+            log_jac += T(0.5) * log(acc)       # scaling from sqrt(remaining)
+            acc *= (one(T) - w2)
             pos += 1
         end
-        L[i, i] = sqrt(max(acc, 0.0))
+        L[i, i] = sqrt(max(acc, zero(T)))
     end
     return log_jac
 end

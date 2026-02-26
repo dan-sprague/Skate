@@ -3,13 +3,17 @@
 ### Q REPRESENTS THE POSITION IN PHASE SPACE OF THE PARAMETERS, P REPRESENTS THE MOMENTUM OF THE PARAMETERS. IN HMC, SAMPLE MOMENTUM FROM A GAUSSIAN DISTRIBUTION, AND THEN SIMULATE THE DYNAMICS OF THE SYSTEM TO PROPOSE NEW SAMPLES.
 
 function leapfrog!(q, p, g, model, ϵ, ∇!)
-    p .+= (ϵ / 2) .* g          # half-kick with stored gradient
-
-    q .+= ϵ .* p                 # full position step
+    
+    @simd for i in eachindex(p)
+        p[i] += (ϵ / 2) * g[i]
+        q[i] += ϵ * p[i] 
+    end
 
     lp, ok = ∇!(g, model, q)
 
-    p .+= (ϵ / 2) .* g          # half-kick with new gradient
+    @simd for i in eachindex(p)
+        p[i] += (ϵ / 2) * g[i]  
+    end
 
     return lp, ok
 end
@@ -86,18 +90,19 @@ function _hmc_step!(HMC, model, ϵ, L, ∇!)
     return α, divergent
 end
 
+### DIM THRESHOLD FOR ENZYME FORWARD OR REVERSE 
+
 const FORWARD_MODE_THRESHOLD = 20
 
 ## note -- ∇logp! handles zeroing of gradient buffer
-function sample(model, num_samples; ϵ = 0.1, L = 10, warmup = 1000, ad = :auto)
-    dim = model.dim
 
-    ## ── Select AD mode ──
+function _make_grad(model; ad = :auto)
+    dim = model.dim
     use_forward = if ad == :forward
         true
     elseif ad == :reverse
         false
-    else  # :auto
+    else
         dim ≤ FORWARD_MODE_THRESHOLD
     end
 
@@ -126,6 +131,12 @@ function sample(model, num_samples; ϵ = 0.1, L = 10, warmup = 1000, ad = :auto)
         error("Enzyme autodiff failed — see log above for details")
     end
     printstyled("✓  Gradient ready\n"; color=:green, bold=true)
+    return ∇!
+end
+
+"""Run a single chain: warmup + sampling. Returns (raw_samples::Matrix, n_divergent)."""
+function _run_chain(model, num_samples, ϵ, L, warmup, ∇!; chain_id = 1, quiet = false)
+    dim = model.dim
 
     HMC = HMCState(
         PhaseSpacePoint(zeros(Float64, dim), zeros(Float64, dim)),
@@ -133,10 +144,11 @@ function sample(model, num_samples; ϵ = 0.1, L = 10, warmup = 1000, ad = :auto)
         zeros(Float64, dim)
     )
 
-    ## ── Warmup: adapt step size via dual averaging ──
-    printstyled("~  Warmup "; color=:yellow, bold=true)
-    printstyled("$warmup"; color=:white, bold=true)
-    printstyled(" iterations  ϵ₀=$ϵ\n"; color=:yellow)
+    ## ── Warmup ──
+    if !quiet
+        printstyled("  Chain $chain_id  "; color=:yellow, bold=true)
+        printstyled("warmup $warmup iterations  ϵ₀=$ϵ\n"; color=:yellow)
+    end
 
     da = DualAveraging(Float64(ϵ))
     ϵ_curr = Float64(ϵ)
@@ -146,35 +158,68 @@ function sample(model, num_samples; ϵ = 0.1, L = 10, warmup = 1000, ad = :auto)
         n_warmup_div += div
         ϵ_curr = adapt!(da, α)
     end
-    ϵ = adapted_ε(da)
+    ϵ_adapted = adapted_ε(da)
 
-    printstyled("✓  Adapted ϵ = "; color=:green, bold=true)
-    printstyled("$(round(ϵ; sigdigits=4))\n"; color=:white, bold=true)
-    if n_warmup_div > 0
-        printstyled("⚠  $n_warmup_div divergent transitions during warmup\n"; color=:yellow)
+    if !quiet
+        printstyled("  Chain $chain_id  "; color=:green, bold=true)
+        printstyled("adapted ϵ = $(round(ϵ_adapted; sigdigits=4))\n"; color=:white, bold=true)
+        if n_warmup_div > 0
+            printstyled("  Chain $chain_id  ⚠ $n_warmup_div divergent transitions during warmup\n"; color=:yellow)
+        end
     end
 
     ## ── Sampling ──
-    printstyled("~  Sampling "; color=:cyan, bold=true)
-    printstyled("$num_samples"; color=:white, bold=true)
-    printstyled(" samples  ϵ=$(round(ϵ; sigdigits=4))  L=$L\n"; color=:cyan)
-
-    samples = Matrix{Float64}(undef, dim, num_samples)
+    raw = Matrix{Float64}(undef, dim, num_samples)
     n_divergent = 0
     progress_interval = max(1, num_samples ÷ 10)
     @inbounds for i in 1:num_samples
-        _, div = _hmc_step!(HMC, model, ϵ, L, ∇!)
+        _, div = _hmc_step!(HMC, model, ϵ_adapted, L, ∇!)
         n_divergent += div
-        samples[:, i] .= HMC.curr.q
-        if i % progress_interval == 0
+        raw[:, i] .= HMC.curr.q
+        if !quiet && i % progress_interval == 0
             pct = 100i ÷ num_samples
-            printstyled("   $(lpad(pct, 3))%  "; color=:light_black)
-            printstyled("$i/$num_samples\n"; color=:light_black)
+            printstyled("  Chain $chain_id  $(lpad(pct, 3))%  $i/$num_samples\n"; color=:light_black)
         end
     end
-    printstyled("✓  Done\n"; color=:green, bold=true)
-    if n_divergent > 0
-        printstyled("⚠  $n_divergent divergent transitions during sampling — consider reducing ϵ or reparameterizing\n"; color=:yellow)
+    if !quiet && n_divergent > 0
+        printstyled("  Chain $chain_id  ⚠ $n_divergent divergent transitions\n"; color=:yellow)
     end
-    return model.constrain.(eachcol(samples))
+
+    return raw, n_divergent
+end
+
+function sample(model, num_samples; ϵ = 0.1, L = 10, warmup = 1000, ad = :auto, chains = 4)
+    ∇! = _make_grad(model; ad)
+
+    printstyled("~  Sampling "; color=:cyan, bold=true)
+    printstyled("$chains chain(s) × $num_samples samples"; color=:white, bold=true)
+    printstyled("  L=$L\n"; color=:cyan)
+
+    tasks = [Threads.@spawn _run_chain(model, num_samples, ϵ, L, warmup, ∇!;
+                                        chain_id=c, quiet=true)
+             for c in 1:chains]
+
+    raw_chains = Vector{Matrix{Float64}}(undef, chains)
+    total_div = 0
+    for c in 1:chains
+        raw, ndiv = fetch(tasks[c])
+        raw_chains[c] = raw
+        total_div += ndiv
+        if ndiv > 0
+            printstyled("  Chain $c  ⚠ $ndiv divergent transitions\n"; color=:yellow)
+        end
+    end
+
+    printstyled("✓  Done"; color=:green, bold=true)
+    if total_div > 0
+        printstyled("  ⚠ $total_div total divergent transitions\n"; color=:yellow)
+    else
+        println()
+    end
+
+    result = Chains(raw_chains, model.constrain)
+    println()
+    show(stdout, MIME"text/plain"(), result)
+    println()
+    return result
 end
