@@ -2,7 +2,8 @@ module Skate
 
 using SkateBase
 using Enzyme
-using Random: randn, randn!
+using Random: randn, randn!, Xoshiro
+using LinearAlgebra: dot
 using Statistics
 using Printf: @sprintf
 using SpecialFunctions: gamma_inc

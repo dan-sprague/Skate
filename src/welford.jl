@@ -26,5 +26,17 @@ function welford_variance(state::WelfordState)
     if state.n < 2
         return ones(length(state.mean))
     end
-    return state.M2n ./ (state.n - 1) 
+    return state.M2n ./ (state.n - 1)
+end
+
+function welford_variance!(out::Vector{Float64}, state::WelfordState)
+    if state.n < 2
+        fill!(out, 1.0)
+    else
+        denom = state.n - 1
+        @inbounds @simd for i in eachindex(out)
+            out[i] = state.M2n[i] / denom
+        end
+    end
+    out
 end

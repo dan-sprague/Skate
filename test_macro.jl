@@ -2,7 +2,7 @@ using Pkg; Pkg.activate(@__DIR__)
 using Skate
 using Random
 
-@spec MixtureModel begin
+@skate MixtureModel begin
     @constants begin
         N::Int
         K::Int
@@ -20,6 +20,7 @@ using Random
         target += dirichlet_lpdf(theta, 1.0)
         target += normal_lpdf(sigma, 0.0, 5.0)
         target += multi_normal_diag_lpdf(mu, 0.0, 10.0)
+        
         for i in 1:N
             target += log_mix(theta, j -> 
             multi_normal_diag_lpdf(x[i, :], mu[j, :], sigma)
@@ -49,7 +50,7 @@ m = make_mixturemodel(d);
 
 using Test
 @time ch = sample(m, 1000;
-ϵ = 0.1, L = 10, warmup = 100, chains = 4,
+ϵ = 0.1, max_depth = 10, warmup = 100, chains = 4,
 ad = :forward)
 
 
@@ -139,7 +140,7 @@ for k in 1:K_fc
 end
 
 println("Full-covariance mixture model: dim=$(m_fc.dim), log_prob=$(round(lp, digits=2))")
-@time ch_fc = sample(m_fc, 2000; ϵ = 0.05, L = 10, warmup = 500)
+@time ch_fc = sample(m_fc, 2000; ϵ = 0.05, max_depth = 10, warmup = 500)
 
 # ── Verify FullCovMixture posterior recovers truth ────────────────────────────
 using LinearAlgebra

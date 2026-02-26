@@ -3,12 +3,13 @@
 using Pkg; Pkg.activate(@__DIR__)
 using Skate
 using Random
-using Distributions
+using Statistics
+using Distributions: Weibull, Exponential, BetaBinomial
 # ─────────────────────────────────────────────────────────────────────────────
 # Model definition
 # ─────────────────────────────────────────────────────────────────────────────
 
-@spec JointALM begin
+@skate JointALM begin
     @constants begin
         n1::Int
         n2::Int
@@ -138,7 +139,7 @@ const TRUE = (
     P0           = 0.2,
 )
 
-n1, n2 = 500, 50
+n1, n2 = 3500, 150
 p, p_k = 4, 2
 n_countries = 7
 MRC_MAX = 20
@@ -243,7 +244,7 @@ println("Test log_prob = $(round(lp; sigdigits=4))")
 @assert isfinite(lp) "log_prob is not finite at test point"
 
 println("\nSampling 10000 draws (500 warmup)...")
-@time samples = Skate.sample(m, 10000; ϵ=0.1, L=10, warmup=500,chains=4);
+@time samples = Skate.sample(m, 2000; ϵ=0.1, max_depth=8, warmup=1000,chains=4);
 println("Done — $(length(samples)) draws\n")
 
 # ─────────────────────────────────────────────────────────────────────────────
