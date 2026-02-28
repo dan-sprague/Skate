@@ -1,6 +1,6 @@
 UNDER CONSTRUCTION!!!!!
 
-# Skate - Scalable, High Performance Bayesian Inference In Native Julia
+# PhaseSkate - Scalable, High Performance Bayesian Inference In Native Julia
 
 A native Julia implementation of the Stan approach to Bayesian inference. Built for [Enzyme](https://github.com/EnzymeAD/Enzyme.jl). Skate along the logjoint with ease!
 
