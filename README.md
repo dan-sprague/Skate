@@ -2,7 +2,7 @@ UNDER CONSTRUCTION!!!!! This repo was started for my own benefit and work, but I
 
 # PhaseSkate - Scalable, High Performance Bayesian Inference In Native Julia
 
-A native Julia implementation of the Stan approach to Bayesian inference. Built for [Enzyme](https://github.com/EnzymeAD/Enzyme.jl). Skate along the logjoint with ease!
+A native Julia implementation of the Stan approach to Bayesian inference. Built *for* [Enzyme](https://github.com/EnzymeAD/Enzyme.jl). Skate along the logjoint with ease!
 
 ## Design Philosophy
 
@@ -24,6 +24,9 @@ Below is a complex joint survival model for tiered data in a genetic disease. Cl
 1. The syntax should give Stan immediately. I like it! I think it provides structure and clarity.
 2. NO TILDES! I think, contrary to many mathematicians, people in the applied sciences and particularly programmers find this syntax very confusing. It *obscures the fact that really all that is happening is a summation to the log joint function*. I think people will be able to, with greater ease, write more performant code if the abstraction of the tilde removes this confusion.
 3. The @for macro -- probably to be renamed. I made this so that I could write broadcast syntax for clarity, while the macro essentially unrolls it into a non allocating for loop. Unlike the `@..` macro available already, I am trying to build this macro to handle multiple accumulators in a single `for i in 1:n` block. We'll see! Right now its working in this case!!
+
+
+You can run this example for yourself with the joint_alm.jl script to the left with synthetic data (real data is private and protected). There is also a stan implementation. 
 
 
 
