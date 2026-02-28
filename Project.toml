@@ -1,7 +1,7 @@
-name = "Skate"
+name = "PhaseSkate"
 uuid = "d9f16b3c-1d8e-11eb-0a9c-5b1e7cfae1b2"
 license = "MIT"
-version = "0.2.0"
+version = "0.1.0"
 authors = ["Daniel A. Sprague"]
 description = "Scalable, High Performance Bayesian Inference in Native Julia"
 

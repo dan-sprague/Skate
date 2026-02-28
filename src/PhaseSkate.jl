@@ -1,25 +1,27 @@
-module Skate
+module PhaseSkate
 
-using SkateBase
 using Enzyme
 using Random: randn, randn!, Xoshiro
 using LinearAlgebra: dot
 using Statistics
 using Printf: @sprintf
-using SpecialFunctions: gamma_inc
+using SpecialFunctions: gamma_inc, loggamma, logbeta
 
 import Base.@kwdef
-import SkateBase: mean
+import Statistics: mean
 
+include("utilities.jl")
+include("bijections.jl")
+include("lpdfs.jl")
 include("welford.jl")
 include("safe_grads.jl")
 include("hmc.jl")
+include("chains.jl")
 include("lang.jl")
 include("sbc.jl")
 
 export @skate, sample, log_prob, ModelLogDensity,
        sbc, SBCResult, calibrated,
-       # re-export from SkateBase
        Chains, samples, mean, ci, thin, min_ess,
        cholesky,
        transform, log_abs_det_jacobian,
@@ -54,4 +56,4 @@ export @skate, sample, log_prob, ModelLogDensity,
        lkj_corr_cholesky_lpdf,
        diag_pre_multiply
 
-end # module Skate
+end # module PhaseSkate

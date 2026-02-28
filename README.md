@@ -9,15 +9,13 @@ A native Julia implementation of the Stan approach to Bayesian inference. Built 
 1. Speed - I built PhaseSkate because I needed a tool that could handle the large, messy and complex data+models of Biology. To do this, PhaseSkate was built **for** Enzyme with minimal external dependencies, with an emphasis on type stability and pure LPDF functions.
 2. Clarity - the `@skate` that defines the Skate DSL is a complete description of the information needed by a reader (and the compiler!!) to understand the model. What this means in practice is that the information flowing into the model is not scattered across an analysis script. The `@skate` block, while technical, is visually distinct, cohesive, and defines everything. Stan got this right.
 
+**Note:** DSL not finished yet. Right now in generates some not super pretty function names that I am working on simplifying.
+
 ```julia
 
-include("src/bijections.jl")
-include("src/utilities.jl")
-include("src/logdensitygenerator.jl")
-include("src/lpdfs.jl")
-import Base.@kwdef
+using Pkg; Pkg.activate(@__DIR__)
+using PhaseSkate
 
-include("src/lang.jl")
 
 @skate MixtureModel begin
     @constants begin ## constants and data

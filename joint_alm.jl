@@ -1,7 +1,7 @@
 # Joint ALM Model — @for syntax
 # Uses @for broadcast-to-loop unrolling for readable, zero-allocation regression blocks.
 using Pkg; Pkg.activate(@__DIR__)
-using Skate
+using PhaseSkate
 using Random
 using Statistics
 using Distributions: Weibull, Exponential, BetaBinomial
@@ -249,68 +249,3 @@ println("Test log_prob = $(round(lp; sigdigits=4))")
 println("\nSampling 10000 draws (500 warmup)...")
 @time samples = Skate.sample(m, 2000; ϵ=0.1, max_depth=8, warmup=1000,chains=4);
 println("Done — $(length(samples)) draws\n")
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Posterior vs ground truth
-# ─────────────────────────────────────────────────────────────────────────────
-
-N = length(samples)
-
-function post_summary(name, accessor, truth)
-    vals = [accessor(s) for s in samples]
-    m = sum(vals) / N
-    sorted = sort(vals)
-    lo = sorted[max(1, round(Int, 0.025 * N))]
-    hi = sorted[min(N, round(Int, 0.975 * N))]
-    covered = lo <= truth <= hi
-    bias = m - truth
-    return (; name, truth, mean=m, lo, hi, covered, bias)
-end
-
-function post_summary_vec(name, accessor, truth_vec)
-    rows = []
-    for k in eachindex(truth_vec)
-        push!(rows, post_summary("$(name)[$k]", s -> accessor(s)[k], truth_vec[k]))
-    end
-    rows
-end
-
-results = []
-push!(results, post_summary("log_shape",       s -> s.log_shape,       TRUE.log_shape))
-push!(results, post_summary("log_scale",       s -> s.log_scale,       TRUE.log_scale))
-append!(results, post_summary_vec("beta_s",    s -> s.beta_s,          TRUE.beta_s))
-append!(results, post_summary_vec("beta_k",    s -> s.beta_k,          TRUE.beta_k))
-push!(results, post_summary("sigma_country_k", s -> s.sigma_country_k, TRUE.sigma_country_k))
-push!(results, post_summary("sigma_country_s", s -> s.sigma_country_s, TRUE.sigma_country_s))
-append!(results, post_summary_vec("mu_country_k", s -> s.mu_country_k, TRUE.mu_country_k))
-append!(results, post_summary_vec("mu_country_s", s -> s.mu_country_s, TRUE.mu_country_s))
-push!(results, post_summary("mu_k",            s -> s.mu_k,            TRUE.mu_k))
-push!(results, post_summary("omega_k",         s -> s.omega_k,         TRUE.omega_k))
-push!(results, post_summary("gamma_k",         s -> s.gamma_k,         TRUE.gamma_k))
-push!(results, post_summary("gamma_hill",      s -> s.gamma_hill,      TRUE.gamma_hill))
-push!(results, post_summary("EC50",            s -> s.EC50,            TRUE.EC50))
-push!(results, post_summary("log_phi",         s -> s.log_phi,         TRUE.log_phi))
-push!(results, post_summary("P0",              s -> s.P0,              TRUE.P0))
-
-println("=" ^ 82)
-println(rpad("Parameter", 18), rpad("Truth", 10), rpad("Mean", 10),
-        rpad("95% CI", 22), rpad("Bias", 10), "Cover")
-println("-" ^ 82)
-n_covered = 0
-for r in results
-    global n_covered
-    ci = "[$(round(r.lo; digits=3)), $(round(r.hi; digits=3))]"
-    mark = r.covered ? "  ✓" : "  ✗"
-    n_covered += r.covered
-    println(rpad(r.name, 18),
-            rpad(round(r.truth; digits=4), 10),
-            rpad(round(r.mean; digits=4), 10),
-            rpad(ci, 22),
-            rpad(round(r.bias; digits=4), 10),
-            mark)
-end
-println("-" ^ 82)
-pct = round(100 * n_covered / length(results); digits=1)
-println("Coverage: $n_covered / $(length(results)) ($pct%) of 95% CIs contain the truth")
-
-
