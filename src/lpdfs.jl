@@ -1,3 +1,23 @@
+# Lanczos approximation for loggamma — pure arithmetic, no foreign calls.
+# Enzyme can differentiate this trivially (only +, -, *, /, log).
+# Lanczos g=7, n=9 coefficients — ~15 digits precision for Re(z) > 0.5.
+function _loggamma(z)
+    x = float(z) - 1.0
+    t = x + 7.5
+    s = 0.99999999999980993 +
+        676.5203681218851      / (x + 1.0) +
+       -1259.1392167224028     / (x + 2.0) +
+        771.32342877765313     / (x + 3.0) +
+       -176.61502916214059     / (x + 4.0) +
+        12.507343278686905     / (x + 5.0) +
+       -0.13857109526572012    / (x + 6.0) +
+        9.9843695780195716e-6  / (x + 7.0) +
+        1.5056327351493116e-7  / (x + 8.0)
+    return 0.5 * log(2π) + (x + 0.5) * log(t) - t + log(s)
+end
+
+_logbeta(a, b) = _loggamma(a) + _loggamma(b) - _loggamma(a + b)
+
 """
     multi_normal_cholesky_lpdf(x, μ, L)
 
@@ -109,24 +129,24 @@ function gamma_lpdf(x, α, β)
     x_safe = max(x, eps(typeof(float(x))))
     α_safe = max(α, eps(typeof(float(α))))
     β_safe = max(β, eps(typeof(float(β))))
-    return α_safe * log(β_safe) - loggamma(α_safe) + (α_safe - 1) * log(x_safe) - β_safe * x_safe
+    return α_safe * log(β_safe) - _loggamma(α_safe) + (α_safe - 1) * log(x_safe) - β_safe * x_safe
 end
 
 function poisson_lpdf(x, λ)
     λ_safe = max(λ, eps(typeof(float(λ))))
-    return x * log(λ_safe) - λ_safe - loggamma(x + 1)
+    return x * log(λ_safe) - λ_safe - _loggamma(x + 1)
 end
 
 function binomial_lpdf(x, n, p)
     p_safe = clamp(p, eps(typeof(float(p))), one(p) - eps(typeof(float(p))))
-    log_n_choose_x = -log(n + 1) - logbeta(n - x + 1, x + 1)
+    log_n_choose_x = -log(n + 1) - _logbeta(n - x + 1, x + 1)
     return log_n_choose_x + x * log(p_safe) + (n - x) * log(1 - p_safe)
 end
 
 function beta_binomial_lpdf(x, n, α, β)
     α_safe = max(α, eps(typeof(float(α))))
     β_safe = max(β, eps(typeof(float(β))))
-    return -log(n + 1) - logbeta(n - x + 1, x + 1) + logbeta(x + α_safe, n - x + β_safe) - logbeta(α_safe, β_safe)
+    return -log(n + 1) - _logbeta(n - x + 1, x + 1) + _logbeta(x + α_safe, n - x + β_safe) - _logbeta(α_safe, β_safe)
 end
 
 function weibull_lpdf(x, α, σ)
@@ -154,7 +174,7 @@ function neg_binomial_2_lpdf(y, μ, ϕ)
     μ_safe = max(μ, eps(typeof(float(μ))))
     ϕ_safe = max(ϕ, eps(typeof(float(ϕ))))
 
-    term1 = loggamma(y + ϕ_safe) - loggamma(y + 1) - loggamma(ϕ_safe)
+    term1 = _loggamma(y + ϕ_safe) - _loggamma(y + 1) - _loggamma(ϕ_safe)
     term2 = ϕ_safe * (log(ϕ_safe) - log(ϕ_safe + μ_safe))
     term3 = y * (log(μ_safe) - log(ϕ_safe + μ_safe))
 
@@ -175,7 +195,7 @@ end
     binomial_logit_lpdf(y, n, α)
 """
 function binomial_logit_lpdf(y, n, α)
-    log_n_choose_y = -log(n + 1) - logbeta(n - y + 1, y + 1)
+    log_n_choose_y = -log(n + 1) - _logbeta(n - y + 1, y + 1)
     return log_n_choose_y + y * α - n * (log1p(exp(-abs(α))) + max(zero(α), α))
 end
 
@@ -215,7 +235,7 @@ function beta_lpdf(x, α, β)
     x_safe = clamp(x, eps(typeof(float(x))), one(x) - eps(typeof(float(x))))
     α_safe = max(α, eps(typeof(float(α))))
     β_safe = max(β, eps(typeof(float(β))))
-    return (α_safe - 1)*log(x_safe) + (β_safe - 1)*log(1 - x_safe) - logbeta(α_safe, β_safe)
+    return (α_safe - 1)*log(x_safe) + (β_safe - 1)*log(1 - x_safe) - _logbeta(α_safe, β_safe)
 end
 
 function lognormal_lpdf(x, μ, σ)
@@ -228,7 +248,7 @@ function student_t_lpdf(x, ν, μ, σ)
     σ_safe = max(σ, eps(typeof(float(σ))))
     ν_safe = max(ν, eps(typeof(float(ν))))
     z = (x - μ) / σ_safe
-    return loggamma(0.5*(ν_safe + 1)) - loggamma(0.5*ν_safe) -
+    return _loggamma(0.5*(ν_safe + 1)) - _loggamma(0.5*ν_safe) -
            0.5*log(ν_safe*π) - log(σ_safe) -
            0.5*(ν_safe + 1)*log(1 + z^2/ν_safe)
 end
@@ -246,10 +266,10 @@ function dirichlet_lpdf(x, α)
         xi_safe = clamp(xi, eps_val, one(T) - eps_val)
         αi_safe = max(αi, eps_val)
         sum_α += αi_safe
-        sum_loggamma_α += loggamma(αi_safe)
+        sum_loggamma_α += _loggamma(αi_safe)
         kernel += (αi_safe - one(T)) * log(xi_safe)
     end
-    return loggamma(sum_α) - sum_loggamma_α + kernel
+    return _loggamma(sum_α) - sum_loggamma_α + kernel
 end
 
 """
@@ -267,7 +287,7 @@ function dirichlet_lpdf(x, α::Real)
     for i in 1:K
         kernel += (α_safe - one(T)) * log(clamp(x[i], eps_val, one(T) - eps_val))
     end
-    return loggamma(K * α_safe) - K * loggamma(α_safe) + kernel
+    return _loggamma(K * α_safe) - K * _loggamma(α_safe) + kernel
 end
 
 function uniform_lpdf(x, lo, hi)

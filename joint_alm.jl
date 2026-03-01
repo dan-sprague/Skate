@@ -1,4 +1,4 @@
-# Joint ALM Model — @for syntax
+# Joint ALM Model — @for syntax demo 
 # Uses @for broadcast-to-loop unrolling for readable, zero-allocation regression blocks.
 using Pkg; Pkg.activate(@__DIR__)
 using PhaseSkate
