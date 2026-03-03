@@ -224,3 +224,8 @@ end
 end
 
 end # @testset "PhaseSkate"
+
+# ── PosteriorDB validation tests (opt-in) ────────────────────────────────────
+if get(ENV, "POSTERIORDB_TESTS", "false") == "true"
+    include("posteriordb/runtests.jl")
+end

@@ -1,18 +1,49 @@
 # PhaseSkate
 
-Scalable, high-performance Bayesian inference in native Julia. Built *for* [Enzyme](https://github.com/EnzymeAD/Enzyme.jl).
+High-performance HMC Bayesian inference in native Julia. An implementation of, and love letter to, the Stan approach to PPLs. Except no tildes. 
 
-> **Status:** Early-stage — API may change. Contributions and feedback welcome!
+Built for [Enzyme](https://github.com/EnzymeAD/Enzyme.jl). 
+
+> Early-stage — API may change. Contributions and feedback welcome!
 
 ## Why PhaseSkate?
 
-HMC is intensive, CPU-bound numerical computation of complex gradients — at its heart a physics simulation of a particle flying around phase space. Julia + Enzyme LLVM autodiff is the ideal foundation for this workload.
+I built this package to answer a question that has been bothing me: *given an efficient logjoint function and a gradient, how fast can Julia+Enzyme sample complex posteriors? Can I design a minimal PPL around this?* 
+
+HMC is intensive, CPU-bound numerical computation of complex gradients — at its heart a physics simulation of a particle skating around phase space. This is Julia's home turf!!!!!!!
 
 **Design principles:**
 
-1. **Speed** — Pure Julia log-density functions, zero-allocation `@for` macro, and Enzyme reverse-mode AD. No C++ backend, no FFI overhead.
+1. **Speed** — Pure log-density and jacobian functions designed to feed efficient code into Enzyme AD.
 2. **Clarity** — The `@skate` DSL defines constants, parameters, and the log-joint in a single cohesive block. No scattered model definitions.
-3. **No tildes** — `target += normal_lpdf(x, mu, sigma)` makes the log-joint accumulation explicit. Programmers and applied scientists find this clearer than `x ~ Normal(mu, sigma)`.
+3. **No tildes** — `target += normal_lpdf(x, mu, sigma)` makes the log-joint accumulation explicit. Fast code = non-allocating code.
+
+**Features**
+
+1. A Stan-like DSL, with some changes.
+2. Stan-like LKJ and Cholesky factorization for covariance matrices (or whatever) and out-of-the-box NegBin(mu,disp) parameterization, sometimes called "NegBin2".
+4. `@for` - keep readable broadcast math that gets rewritten under the hood as a direct accumulator into `target`. Allows you to accumulate multiple things sharing a common axis of iteration in a single for loop while keeping things legible :).
+```julia
+@for target += begin
+            log_k_2 = mu_k .+ (tier2_X * beta_k) .+ mu_country_k[tier2_country_ids] .+ (omega_k .* z_k)
+            log_eff_scale_2 = log_scale .- ((tier2_X * beta_s) .+ mu_country_s[tier2_country_ids] ...
+        end
+```
+4. Auto @view: Maybe could be annoying, but the DSL is currently setup so that `arr[idx,:]` operations automatically have `@view` applied.
+
+
+
+**Implementation Notes:**
+
+1. Minimal dependencies. In my quest to answer the motivating question described above, I wanted total control over the code being passed into Enzyme AD. You will find lpdfs, bijections, and a reimplementation of Stan's NUTS algorithm in this repository.
+
+
+**Testing**
+
+1. Simulation Based Calibration -- replicated experiments on Stan's documentation page. 
+2. PosteriorDB -- validated against reference posteriors. 
+3. Validate lpdfs against Distributions.jl logpdf functions.
+
 
 ## Installation
 
