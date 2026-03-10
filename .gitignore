@@ -19,5 +19,11 @@ __pycache__/
 *.o
 *.exe
 
+# Docs build artifacts
+docs/build/
+docs/node_modules/
+docs/package.json
+docs/package-lock.json
+
 # OS
 .DS_Store
