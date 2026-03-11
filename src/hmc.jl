@@ -1,3 +1,102 @@
+## ── Dense Mass Matrix ──
+
+struct DenseMetric
+    inv_metric::Matrix{Float64}   # M⁻¹ for leapfrog / KE / u-turn
+    L::LowerTriangular{Float64, Matrix{Float64}}  # cholesky(M).L for momentum sampling
+    tmp::Vector{Float64}          # scratch buffer (avoids allocs in hot loop)
+end
+
+"""Construct a `DenseMetric` from a covariance matrix Σ (the inverse metric).
+`L = cholesky(Σ⁻¹).L` so that `L * z` ~ N(0, Σ⁻¹) = N(0, M)."""
+function DenseMetric(Σ::AbstractMatrix{Float64})
+    C = cholesky(Symmetric(Σ))
+    inv_metric = Matrix(Σ)
+    M = inv(C)  # Σ⁻¹ via Cholesky inverse (numerically stable)
+    L = LowerTriangular(Matrix(cholesky(Symmetric(M)).L))
+    tmp = zeros(size(Σ, 1))
+    DenseMetric(inv_metric, L, tmp)
+end
+
+function DenseMetric(dim::Int)
+    DenseMetric(Matrix{Float64}(I, dim, dim))
+end
+
+"""Update `inv_metric` in-place from Welford covariance state, with Stan-style shrinkage.
+Returns the (possibly new) metric — replaces the DenseMetric struct since it's immutable."""
+function _update_dense_metric!(old_metric::DenseMetric, welford::WelfordCovState, dim::Int)
+    n = welford.n
+    if n < 2
+        return old_metric
+    end
+    Σ = welford_covariance(welford)
+    # Stan-style shrinkage: (n/(n+5))*Σ + (5/(n+5))*1e-3*I
+    shrink_data = n / (n + 5.0)
+    shrink_prior = 5.0 / (n + 5.0)
+    @inbounds for j in 1:dim, i in 1:dim
+        Σ[i, j] = shrink_data * Σ[i, j]
+    end
+    @inbounds for i in 1:dim
+        Σ[i, i] += shrink_prior * 1e-3
+    end
+    # Try Cholesky; add jitter on failure; fall back to diagonal
+    try
+        return DenseMetric(Σ)
+    catch
+        @inbounds for i in 1:dim
+            Σ[i, i] += 1e-6
+        end
+        try
+            return DenseMetric(Σ)
+        catch
+            # Fall back to diagonal
+            diag_vec = ones(dim)
+            @inbounds for i in 1:dim
+                diag_vec[i] = max(Σ[i, i], 1e-3)
+            end
+            return DenseMetric(diagm(diag_vec))
+        end
+    end
+end
+
+## ── Dense dispatch methods ──
+
+function leapfrog!(q, p, g, model, ϵ, metric::DenseMetric, ∇!)
+    @simd for i in eachindex(p)
+        p[i] += (ϵ / 2) * g[i]
+    end
+
+    mul!(metric.tmp, metric.inv_metric, p)
+    @simd for i in eachindex(q)
+        q[i] += ϵ * metric.tmp[i]
+    end
+
+    lp, ok = ∇!(g, model, q)
+
+    @simd for i in eachindex(p)
+        p[i] += (ϵ / 2) * g[i]
+    end
+
+    return lp, ok
+end
+
+function sample_momentum!(rng, p, metric::DenseMetric)
+    randn!(rng, metric.tmp)
+    mul!(p, metric.L, metric.tmp)
+end
+
+function kinetic_energy(p, metric::DenseMetric)
+    mul!(metric.tmp, metric.inv_metric, p)
+    return 0.5 * dot(p, metric.tmp)
+end
+
+function check_uturn(ρ, p_start, p_end, metric::DenseMetric)
+    mul!(metric.tmp, metric.inv_metric, p_start)
+    s1 = dot(ρ, metric.tmp)
+    mul!(metric.tmp, metric.inv_metric, p_end)
+    s2 = dot(ρ, metric.tmp)
+    s1 > 0 && s2 > 0
+end
+
 ## LEAPFROG INTEGRATOR
 
 ### Q REPRESENTS THE POSITION IN PHASE SPACE OF THE PARAMETERS, P REPRESENTS THE MOMENTUM OF THE PARAMETERS. IN HMC, SAMPLE MOMENTUM FROM A GAUSSIAN DISTRIBUTION, AND THEN SIMULATE THE DYNAMICS OF THE SYSTEM TO PROPOSE NEW SAMPLES.
@@ -335,9 +434,12 @@ function _nuts_transition!(rng, z, ns::NUTSScratch, model, ϵ, max_depth, inv_me
     return α, ns.divergent[]
 end
 
-### DIM THRESHOLD FOR ENZYME FORWARD OR REVERSE 
+### DIM THRESHOLD FOR ENZYME FORWARD OR REVERSE
 
 const FORWARD_MODE_THRESHOLD = 20
+
+"""Estimate tree depth from leapfrog count: depth ≈ log2(n_leapfrog)."""
+_tree_depth(n_leapfrog::Int) = n_leapfrog > 0 ? floor(Int, log2(n_leapfrog)) : 0
 
 ## note -- ∇logp! handles zeroing of gradient buffer
 
@@ -386,15 +488,17 @@ function _make_grad(model; ad = :auto)
     grad_μs = (time_ns() - t0) / 5 / 1e3
     printstyled("   Gradient: $(round(grad_μs; digits=1)) μs/eval\n"; color=:light_black)
 
-    return ∇!
+    return ∇!, grad_μs
 end
 
 """Run a single NUTS chain: warmup + sampling. Returns (raw_samples::Matrix, n_divergent)."""
-function _run_chain(rng, model, num_samples, ϵ₀, max_depth, warmup, ∇!; chain_id = 1, quiet = false, δ = 0.8, print_lock = ReentrantLock())
+function _run_chain(rng, model, num_samples, ϵ₀, max_depth, warmup, ∇!; chain_id = 1, quiet = false, δ = 0.8, print_lock = ReentrantLock(), callback = nothing, metric = :diagonal)
     dim = model.dim
     ns = NUTSScratch(dim, max_depth)
+    use_dense = (metric == :dense)
 
     # Initialize phase space at random position
+    # Start diagonal even for dense — switch to dense once we have enough warmup samples
     z = PhaseSpacePoint(randn(rng, dim), zeros(dim), zeros(dim), 0.0)
     inv_metric = ones(dim)
 
@@ -418,55 +522,98 @@ function _run_chain(rng, model, num_samples, ϵ₀, max_depth, warmup, ∇!; cha
 
     ## ── Stan-style three-phase windowed warmup ──
     # Phase I  (init_buffer):  step size adaptation only
-    # Phase II (n_window):     step size + metric with expanding windows
+    # Phase II:                step size + metric with expanding windows
     # Phase III (term_buffer): step size adaptation only (final metric)
-    init_buffer = max(1, warmup ÷ 20)
-    term_buffer = max(1, warmup ÷ 20)
+    #
+    # Stan defaults: init_buffer=75, term_buffer=50, base_window=25
+    # Windows double: 25, 50, 100, 200, ... with final window stretched to fill
+    if warmup >= 150  # enough room for Stan's default schedule
+        init_buffer = 75
+        term_buffer = 50
+        base_window = 25
+    else
+        # Short warmup: 15%/75%/10% split
+        init_buffer = max(1, warmup * 15 ÷ 100)
+        term_buffer = max(1, warmup * 10 ÷ 100)
+        base_window = max(1, warmup * 10 ÷ 100)
+    end
     n_window = max(0, warmup - init_buffer - term_buffer)
 
-    # Expanding doubling windows: 1, 2, 4, 8, ...
-    window_sizes = Int[]
-    w = 1
-    while w <= n_window
-        push!(window_sizes, w)
-        w *= 2
+    # Stan window schedule: doubling with final window stretched
+    window_ends = Int[]  # 1-based iteration indices (relative to Phase II start) where windows end
+    if n_window > 0
+        window_size = base_window
+        next_end = window_size
+        while next_end <= n_window
+            # Check if the NEXT window after this one would fit
+            next_next_end = next_end + 2 * window_size
+            if next_next_end > n_window
+                # Stretch this window to fill remaining space
+                push!(window_ends, n_window)
+                break
+            else
+                push!(window_ends, next_end)
+                window_size *= 2
+                next_end += window_size
+            end
+        end
     end
 
-    welford = WelfordState(dim)
+    welford_diag = WelfordState(dim)
+    welford_cov = use_dense ? WelfordCovState(dim) : nothing
     var_buf = ones(dim)
     da = DualAveraging(ϵ; δ)
     ϵ_curr = ϵ
     n_warmup_div = 0
+    window_end_idx = 1  # index into window_ends
 
+    t_warmup_start = time_ns()
     for i in 1:warmup
         α, div = _nuts_transition!(rng, z, ns, model, ϵ_curr, max_depth, inv_metric, ∇!)
         n_warmup_div += div
         ϵ_curr = adapt!(da, α)
 
+        if callback !== nothing
+            try
+                put!(callback, (chain_id=chain_id, phase=:warmup, iteration=i, total=warmup,
+                                step_size=ϵ_curr, tree_depth=_tree_depth(ns.n_leapfrog[]),
+                                accept_rate=α, n_divergent=n_warmup_div,
+                                elapsed_ns=time_ns() - t_warmup_start))
+            catch; end
+        end
+
         # Phase II: metric adaptation with expanding windows
         if i > init_buffer && i <= init_buffer + n_window
-            welford_update!(welford, z.q)
+            welford_update!(welford_diag, z.q)
+            if welford_cov !== nothing
+                welford_update!(welford_cov, z.q)
+            end
 
             window_idx = i - init_buffer
-            cumsum = 0
-            for (widx, wsize) in enumerate(window_sizes)
-                cumsum += wsize
-                if window_idx == cumsum && widx < length(window_sizes)
-                    # End of window: update metric with shrinkage
-                    welford_variance!(var_buf, welford)
-                    n = welford.n
-                    @inbounds for j in eachindex(inv_metric)
-                        inv_metric[j] = max((n / (n + 5.0)) * var_buf[j] + (5.0 / (n + 5.0)) * 1e-3, 1e-3)
+            if window_end_idx <= length(window_ends) && window_idx == window_ends[window_end_idx]
+                if use_dense && welford_cov !== nothing && welford_cov.n > dim
+                    # Enough samples — switch to dense metric
+                    inv_metric = _update_dense_metric!(
+                        inv_metric isa DenseMetric ? inv_metric : DenseMetric(dim),
+                        welford_cov, dim)
+                    welford_cov = WelfordCovState(dim)
+                else
+                    # Diagonal update
+                    welford_variance!(var_buf, welford_diag)
+                    n = welford_diag.n
+                    if inv_metric isa Vector
+                        @inbounds for j in eachindex(inv_metric)
+                            inv_metric[j] = max((n / (n + 5.0)) * var_buf[j] + (5.0 / (n + 5.0)) * 1e-3, 1e-3)
+                        end
                     end
-
-                    # Reset Welford for next window
-                    welford = WelfordState(dim)
-
-                    # Re-find step size for new metric and reset dual averaging
-                    ϵ_curr = find_reasonable_epsilon(rng, z, model, inv_metric, ∇!)
-                    da = DualAveraging(ϵ_curr; δ)
-                    break
+                    # Don't reset welford_cov — keep accumulating for dense
                 end
+                welford_diag = WelfordState(dim)
+                window_end_idx += 1
+
+                # Re-find step size and restart dual averaging (Stan does this at every window end)
+                ϵ_curr = find_reasonable_epsilon(rng, z, model, inv_metric, ∇!)
+                da = DualAveraging(ϵ_curr; δ)
             end
         end
     end
@@ -500,6 +647,15 @@ function _run_chain(rng, model, num_samples, ϵ₀, max_depth, warmup, ∇!; cha
                 printstyled("  Chain $chain_id  $(lpad(pct, 3))%  $i/$num_samples\n"; color=:light_black)
             end
         end
+        if callback !== nothing
+            try
+                put!(callback, (chain_id=chain_id, phase=:sampling, iteration=i, total=num_samples,
+                                step_size=ϵ_adapted, tree_depth=_tree_depth(ns.n_leapfrog[]),
+                                accept_rate=min(1.0, ns.sum_metro_prob[] / max(1, ns.n_leapfrog[])),
+                                n_divergent=n_divergent,
+                                elapsed_ns=time_ns() - t_sample_start))
+            catch; end
+        end
     end
     elapsed_s = (time_ns() - t_sample_start) / 1e9
 
@@ -517,11 +673,19 @@ function _run_chain(rng, model, num_samples, ϵ₀, max_depth, warmup, ∇!; cha
         end
     end
 
+    if callback !== nothing
+        try
+            put!(callback, (chain_id=chain_id, phase=:done, iteration=num_samples, total=num_samples,
+                            step_size=ϵ_adapted, tree_depth=0, accept_rate=0.0,
+                            n_divergent=n_divergent, elapsed_ns=time_ns() - t_sample_start))
+        catch; end
+    end
+
     return raw, n_divergent
 end
 
 """
-    sample(model, num_samples; warmup=1000, chains=4, ϵ=0.1, max_depth=10, ad=:auto, seed=nothing, δ=0.8) → Chains
+    sample(model, num_samples; warmup=1000, chains=4, ϵ=0.1, max_depth=10, ad=:auto, seed=nothing, δ=0.8, metric=:auto) → Chains
 
 Run NUTS (No-U-Turn Sampler) on a compiled model. Returns a `Chains` object.
 
@@ -535,26 +699,40 @@ Run NUTS (No-U-Turn Sampler) on a compiled model. Returns a `Chains` object.
 - `ad`: Autodiff mode — `:auto`, `:forward`, or `:reverse`.
 - `seed`: RNG seed for reproducibility.
 - `δ`: Target acceptance probability for step size adaptation.
+- `metric`: Mass matrix type — `:auto` (dense if dim ≤ 500), `:dense`, or `:diagonal`.
 """
-function sample(model, num_samples; ϵ = 0.1, max_depth = 10, warmup = 1000, ad = :auto, chains = 4, seed = nothing, δ = 0.8)
+function sample(model, num_samples; ϵ = 0.1, max_depth = 10, warmup = 1000, ad = :auto, chains = 4, seed = nothing, δ = 0.8, callback = nothing, metric = :auto)
     num_samples > 0 || throw(ArgumentError("sample: num_samples must be > 0, got $num_samples"))
     warmup >= 0 || throw(ArgumentError("sample: warmup must be >= 0, got $warmup"))
     chains > 0 || throw(ArgumentError("sample: chains must be > 0, got $chains"))
-    ∇! = _make_grad(model; ad)
+    if chains > 1 && Threads.nthreads() < chains + 1
+        @warn "PhaseSkate needs $(chains + 1) threads for $chains parallel chains " *
+              "(have $(Threads.nthreads())). Chains will run sequentially. " *
+              "Start Julia with: julia -t $(chains + 1)"
+    end
+    ∇!, _ = _make_grad(model; ad)
+
+    # Resolve metric type
+    resolved_metric = if metric == :auto
+        model.dim ≤ 500 ? :dense : :diagonal
+    else
+        metric
+    end
 
     # Generate per-chain RNGs for thread safety
     master_rng = seed === nothing ? Xoshiro() : Xoshiro(seed)
     chain_seeds = [rand(master_rng, UInt64) for _ in 1:chains]
 
+    metric_label = resolved_metric == :dense ? "dense" : "diagonal"
     printstyled("~  Sampling "; color=:cyan, bold=true)
     printstyled("$chains chain(s) × $num_samples samples"; color=:white, bold=true)
-    printstyled("  max_depth=$max_depth\n"; color=:cyan)
+    printstyled("  max_depth=$max_depth  metric=$metric_label\n"; color=:cyan)
 
     print_lock = ReentrantLock()
 
     tasks = [Threads.@spawn _run_chain(Xoshiro(chain_seeds[c]),
                                         model, num_samples, ϵ, max_depth, warmup, ∇!;
-                                        chain_id=c, quiet=false, δ, print_lock)
+                                        chain_id=c, quiet=(callback !== nothing), δ, print_lock, callback, metric=resolved_metric)
              for c in 1:chains]
 
     raw_chains = Vector{Matrix{Float64}}(undef, chains)

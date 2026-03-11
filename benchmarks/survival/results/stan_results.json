@@ -1,0 +1,12 @@
+{
+  "backend": "CmdStan",
+  "num_chains": 4,
+  "num_warmup": 1000,
+  "num_samples": 2000,
+  "total_time_s": 69.004,
+  "sampling_time_s": 84.154,
+  "min_ess_bulk": 1631.7689,
+  "max_rhat": 1.0031,
+  "ess_per_sec": 23.6475,
+  "divergences": 0
+}

@@ -252,6 +252,59 @@ function weibull_logsigma_lccdf(x, α, log_σ)
 end
 
 """
+    weibull_logsigma_lpdf_sum(times, α, log_scales, indices)
+
+Vectorized sum of `weibull_logsigma_lpdf` over `indices`. Uses `@simd @inbounds`
+for SIMD vectorization. Returns `∑ᵢ weibull_logsigma_lpdf(times[idx], α, log_scales[idx])`.
+"""
+function weibull_logsigma_lpdf_sum(times, α, log_scales, indices)
+    α_safe = max(α, eps(typeof(float(α))))
+    s = 0.0
+    @inbounds @simd for j in eachindex(indices)
+        idx = indices[j]
+        x_safe = max(times[idx], eps(Float64))
+        log_σ = log_scales[idx]
+        log_x = log(x_safe)
+        s += log(α_safe) - log_σ + (α_safe - 1.0) * (log_x - log_σ) - exp(α_safe * (log_x - log_σ))
+    end
+    return s
+end
+
+"""
+    weibull_logsigma_lccdf_sum(times, α, log_scales, indices)
+
+Vectorized sum of `weibull_logsigma_lccdf` over `indices`. Uses `@simd @inbounds`
+for SIMD vectorization. Returns `∑ᵢ weibull_logsigma_lccdf(times[idx], α, log_scales[idx])`.
+"""
+function weibull_logsigma_lccdf_sum(times, α, log_scales, indices)
+    α_safe = max(α, eps(typeof(float(α))))
+    s = 0.0
+    @inbounds @simd for j in eachindex(indices)
+        idx = indices[j]
+        x_safe = max(times[idx], 0.0)
+        s += -exp(α_safe * (log(x_safe) - log_scales[idx]))
+    end
+    return s
+end
+
+"""
+    normal_lpdf_sum(x, μ, σ)
+
+Vectorized sum of `normal_lpdf` over elements of vector `x` with scalar `μ`, `σ`.
+"""
+function normal_lpdf_sum(x, μ, σ)
+    σ_safe = max(σ, eps(typeof(float(σ))))
+    inv_σ = 1.0 / σ_safe
+    log_norm = -log(σ_safe) - 0.5 * log(2π)
+    s = 0.0
+    @inbounds @simd for i in eachindex(x)
+        z = (x[i] - μ) * inv_σ
+        s += log_norm - 0.5 * z * z
+    end
+    return s
+end
+
+"""
     lkj_corr_cholesky_lpdf(L, η)
 """
 function lkj_corr_cholesky_lpdf(L, η)

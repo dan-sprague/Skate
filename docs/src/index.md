@@ -4,8 +4,8 @@ layout: home
 
 hero:
   name: PhaseSkate
-  text: Bayesian Inference in Native Julia
-  tagline: Scalable, high-performance MCMC powered by Enzyme autodifferentiation
+  text: High Performance Bayesian Inference In Julia
+  tagline: Fast sampling built for complex and high dimension models on CPUs.
   actions:
     - theme: brand
       text: Getting Started
@@ -15,15 +15,15 @@ hero:
       link: /api
 
 features:
-  - icon: ⚡
-    title: Speed
-    details: Pure Julia log-density functions with zero-allocation @for macro and Enzyme reverse-mode AD. No C++ backend, no FFI overhead.
+  - icon: 💻
+    title: Long Live Laptop Bayesian Inference
+    details: Most inference is not done on GPU clusters, but locally. PhaseSkate is built (only) for Enzyme autodiff to quickly sample complex and high dimensional models with minimal allocations.
   - icon: 🔍
     title: Clarity
-    details: The @skate DSL defines constants, parameters, and the log-joint in a single cohesive block.
-  - icon: 📐
-    title: Explicit Accumulation
-    details: "target += normal_lpdf(x, mu, sigma) instead of tilde syntax. The log-joint accumulation is transparent."
+    details: The @skate specification macro encourages readability and centrality of information important to understand a model at a glance.
+  - icon: 𝑓(𝑥)
+    title: Functional Design
+    details: No DAG. PPL constructs an optimized target density function to pass to Enzyme/NUTS. Focus on your Julia!
 ---
 ```
 

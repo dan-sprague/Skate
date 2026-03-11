@@ -763,6 +763,36 @@ function _scalarize(ex, idx::Symbol, env::Dict{Any, _ShapeInfo}, preamble::Vecto
     return Expr(ex.head, new_args...)
 end
 
+"""
+    _hoist_matvec(ex, env, hoisted) → new_ex
+
+Walk `ex` and replace any `Matrix * Vector` subexpression with a fresh symbol.
+Pushes `(sym, mat_expr, vec_expr)` tuples onto `hoisted` for each replacement.
+The caller emits `sym = mat_expr * vec_expr` before the loop (BLAS path).
+"""
+function _hoist_matvec(ex, env, hoisted::Vector{Tuple{Symbol, Any, Any}})
+    ex isa Expr || return ex
+    # Match  *(A, b)  where A is matrix, b is vector
+    if ex.head == :call && ex.args[1] == :* && length(ex.args) == 3
+        mat_ex, vec_ex = ex.args[2], ex.args[3]
+        mat_shape = _infer_shape(mat_ex, env)
+        vec_shape = _infer_shape(vec_ex, env)
+        if mat_shape.kind == _shape_matrix && vec_shape.kind == _shape_vector
+            sym = gensym(:mv)
+            push!(hoisted, (sym, mat_ex, vec_ex))
+            return sym  # replaced — caller will register sym as vector in env
+        end
+        # Also check if it's a column-slice mat * vec
+        if _is_mat_col_slice(mat_ex, env)
+            sym = gensym(:mv)
+            push!(hoisted, (sym, mat_ex, vec_ex))
+            return sym
+        end
+    end
+    new_args = [_hoist_matvec(a, env, hoisted) for a in ex.args]
+    return Expr(ex.head, new_args...)
+end
+
 """Expand a single @for assignment: `@for y = broadcast_expr`."""
 function _expand_for_assign(stmt, env)
     lhs = stmt.args[1]
@@ -784,6 +814,15 @@ function _expand_for_assign(stmt, env)
     end
     len_expr = shape.len
 
+    # Hoist matrix-vector products out of the loop (use BLAS instead of scalar dot)
+    hoisted = Tuple{Symbol, Any, Any}[]
+    rhs = _hoist_matvec(rhs, env, hoisted)
+    pre_loop = Expr[]
+    for (sym, mat_ex, vec_ex) in hoisted
+        push!(pre_loop, :($sym = $mat_ex * $vec_ex))
+        env[sym] = _vector_shape(len_expr)
+    end
+
     idx = gensym(:i)
     preamble = Expr[]
     body = _scalarize(rhs, idx, env, preamble)
@@ -791,8 +830,9 @@ function _expand_for_assign(stmt, env)
     env[lhs] = _vector_shape(len_expr)
 
     return quote
+        $(pre_loop...)
         $lhs = Vector{Float64}(undef, $len_expr)
-        @inbounds for $idx in 1:$len_expr
+        @inbounds @simd for $idx in 1:$len_expr
             $(preamble...)
             $lhs[$idx] = $body
         end
@@ -845,16 +885,20 @@ function _expand_for_block(block, env)
     allocs = Expr[]
     loop_body = Expr[]
 
+    # Hoist matrix-vector products from all RHS expressions
+    hoisted = Tuple{Symbol, Any, Any}[]
+    hoisted_stmts = Expr[]
     for s in stmts
         s isa Expr && s.head == :(=) || continue
         lhs = s.args[1]
-        rhs = s.args[2]
+        new_rhs = _hoist_matvec(s.args[2], env, hoisted)
+        s = :($lhs = $new_rhs)
 
-        shape = _infer_shape(rhs, env)
+        shape = _infer_shape(s.args[2], env)
         if shape.kind == _shape_vector
             push!(allocs, :($lhs = Vector{Float64}(undef, $len_expr)))
             preamble = Expr[]
-            body = _scalarize(rhs, idx, env, preamble)
+            body = _scalarize(s.args[2], idx, env, preamble)
             append!(loop_body, preamble)
             push!(loop_body, :($lhs[$idx] = $body))
             env[lhs] = _vector_shape(len_expr)
@@ -863,9 +907,16 @@ function _expand_for_block(block, env)
         end
     end
 
+    pre_loop = Expr[]
+    for (sym, mat_ex, vec_ex) in hoisted
+        push!(pre_loop, :($sym = $mat_ex * $vec_ex))
+        env[sym] = _vector_shape(len_expr)
+    end
+
     return quote
+        $(pre_loop...)
         $(allocs...)
-        @inbounds for $idx in 1:$len_expr
+        @inbounds @simd for $idx in 1:$len_expr
             $(loop_body...)
         end
     end
@@ -891,12 +942,22 @@ function _expand_for_sum(stmt, env)
     end
     len_expr = shape.len
 
+    # Hoist matrix-vector products out of the loop
+    hoisted = Tuple{Symbol, Any, Any}[]
+    inner = _hoist_matvec(inner, env, hoisted)
+    pre_loop = Expr[]
+    for (sym, mat_ex, vec_ex) in hoisted
+        push!(pre_loop, :($sym = $mat_ex * $vec_ex))
+        env[sym] = _vector_shape(len_expr)
+    end
+
     idx = gensym(:i)
     preamble = Expr[]
     body = _scalarize(inner, idx, env, preamble)
 
     return quote
-        for $idx in 1:$len_expr
+        $(pre_loop...)
+        @inbounds @simd for $idx in 1:$len_expr
             $(preamble...)
             target += $body
         end

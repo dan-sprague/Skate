@@ -5,6 +5,7 @@
 # Usage: julia benchmarks/generate_data.jl
 
 using Random
+using Statistics: median
 using Distributions: Weibull, Exponential, BetaBinomial
 
 # JSON writing without external deps — sufficient for numeric data

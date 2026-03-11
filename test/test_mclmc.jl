@@ -103,7 +103,7 @@ using PhaseSkate: MCLMCState, MCLMCScratch, _normalize!, _generate_unit_vector!,
         end
         constrain_fn(q) = (x = copy(q),)
         model = ModelLogDensity(dim, ℓ, constrain_fn)
-        ∇! = _make_grad(model; ad=:auto)
+        ∇!, _ = _make_grad(model; ad=:auto)
 
         rng = Xoshiro(7)
         state = MCLMCState(randn(rng, dim), zeros(dim), zeros(dim), 0.0)
@@ -192,7 +192,7 @@ using PhaseSkate: MCLMCState, MCLMCScratch, _normalize!, _generate_unit_vector!,
         end
         constrain_fn(q) = (x = copy(q),)
         model = ModelLogDensity(dim, ℓ, constrain_fn)
-        ∇! = _make_grad(model; ad=:auto)
+        ∇!, _ = _make_grad(model; ad=:auto)
 
         rng = Xoshiro(55)
         state = MCLMCState(randn(rng, dim), zeros(dim), zeros(dim), 0.0)
@@ -225,7 +225,7 @@ end
         end
         constrain_fn(q) = (x = copy(q),)
         model = ModelLogDensity(dim, ℓ, constrain_fn)
-        ∇! = _make_grad(model; ad=:auto)
+        ∇!, _ = _make_grad(model; ad=:auto)
 
         rng = Xoshiro(42)
         state = MCLMCState(randn(rng, dim), zeros(dim), zeros(dim), 0.0)
@@ -262,7 +262,7 @@ end
         end
         constrain_fn(q) = (x = copy(q),)
         model = ModelLogDensity(dim, ℓ, constrain_fn)
-        ∇! = _make_grad(model; ad=:auto)
+        ∇!, _ = _make_grad(model; ad=:auto)
 
         rng = Xoshiro(55)
         state = MCLMCState(randn(rng, dim), zeros(dim), zeros(dim), 0.0)

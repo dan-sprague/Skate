@@ -14,7 +14,7 @@ module PhaseSkate
 
 using Enzyme
 using Random: randn, randn!, Xoshiro
-using LinearAlgebra: dot
+using LinearAlgebra: dot, mul!, cholesky, Symmetric, I, LowerTriangular, BLAS, diagm
 using Statistics
 using Printf: @sprintf
 using SpecialFunctions: gamma_inc, loggamma, logbeta, erfinv
@@ -30,9 +30,28 @@ include("safe_grads.jl")
 include("hmc.jl")
 include("chains.jl")
 include("lang.jl")
+include("adjoints.jl")
 include("sbc.jl")
 
-export @skate, make, sample, log_prob, ModelLogDensity,
+"""
+    app(; kwargs...)
+
+Launch the PhaseSkate IDE — a terminal-based environment for Bayesian modeling.
+Requires Tachikoma.jl to be loaded (`using Tachikoma`).
+"""
+function app end
+
+"""
+    dashboard(model::ModelLogDensity, num_samples; kwargs...) → Chains
+    dashboard(chains::Chains; sbc=nothing)
+
+Launch the IDE with a pre-compiled model or existing results.
+Requires Tachikoma.jl to be loaded (`using Tachikoma`).
+"""
+function dashboard end
+
+export app, dashboard,
+       @skate, make, sample, log_prob, ModelLogDensity,
        sbc, SBCResult, calibrated,
        Chains, samples, mean, ci, thin, min_ess,
        cholesky,
@@ -56,8 +75,11 @@ export @skate, make, sample, log_prob, ModelLogDensity,
        neg_binomial_2_lpdf,
        bernoulli_logit_lpdf,
        weibull_logsigma_lpdf,
+       weibull_logsigma_lpdf_sum,
        categorical_logit_lpdf,
        weibull_logsigma_lccdf,
+       weibull_logsigma_lccdf_sum,
+       normal_lpdf_sum,
        lognormal_lpdf,
        student_t_lpdf,
        dirichlet_lpdf,

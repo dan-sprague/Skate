@@ -556,6 +556,87 @@ end
     end
 end
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# Dense Metric Tests
+# ═══════════════════════════════════════════════════════════════════════════════
+
+using PhaseSkate: WelfordCovState, welford_update!, welford_covariance,
+                  DenseMetric, kinetic_energy, sample_momentum!, check_uturn
+using Random: Xoshiro
+
+@testset "WelfordCovState" begin
+    D = 5
+    N = 1000
+    data = [randn(D) for _ in 1:N]
+
+    W = WelfordCovState(D)
+    for x in data
+        welford_update!(W, x)
+    end
+
+    data_matrix = reduce(hcat, data)'
+    expected_mean = vec(mean(data_matrix, dims=1))
+    expected_cov = cov(data_matrix)
+
+    @test W.mean ≈ expected_mean
+    @test welford_covariance(W) ≈ expected_cov rtol=1e-10
+end
+
+@testset "DenseMetric" begin
+    @testset "Kinetic energy" begin
+        Σ = [2.0 0.5; 0.5 1.0]
+        dm = DenseMetric(Σ)
+        p = [1.0, 2.0]
+        expected = 0.5 * dot(p, Σ * p)
+        @test kinetic_energy(p, dm) ≈ expected
+    end
+
+    @testset "Momentum sampling" begin
+        Σ = [2.0 0.5; 0.5 1.0]
+        dm = DenseMetric(Σ)
+        rng = Xoshiro(42)
+        N = 50000
+        samples_mat = zeros(2, N)
+        p = zeros(2)
+        for i in 1:N
+            sample_momentum!(rng, p, dm)
+            samples_mat[:, i] .= p
+        end
+        # inv_metric = Σ means M = Σ⁻¹, so p ~ N(0, M) = N(0, Σ⁻¹)
+        empirical_cov = cov(samples_mat')
+        expected_cov = inv(Σ)
+        @test empirical_cov ≈ expected_cov rtol=0.1
+    end
+
+    @testset "U-turn check" begin
+        Σ = [1.0 0.0; 0.0 1.0]
+        dm = DenseMetric(Σ)
+        ρ = [1.0, 1.0]
+        p_start = [1.0, 0.5]
+        p_end = [0.5, 1.0]
+        @test check_uturn(ρ, p_start, p_end, dm) == true
+
+        p_bad = [-2.0, -2.0]
+        @test check_uturn(ρ, p_start, p_bad, dm) == false
+    end
+end
+
+@testset "Integration: Dense Metric Sampling" begin
+    y_data = randn(20)
+    d = SimpleNormalData(N=20, y=y_data)
+    m = make(d)
+
+    ch = sample(m, 200; warmup=100, chains=2, seed=42, metric=:dense)
+    @test ch isa Chains
+    @test size(ch.data, 1) == 200
+
+    mu_post = mean(ch, :mu)
+    @test isfinite(mu_post)
+
+    ess_val = min_ess(ch)
+    @test ess_val > 0
+end
+
 end # @testset "PhaseSkate"
 
 # ── PosteriorDB validation tests (opt-in) ────────────────────────────────────

@@ -1,0 +1,11 @@
+{
+  "sampling_time_s": 110.3,
+  "backend": "PhaseSkate",
+  "num_samples": 2000,
+  "num_warmup": 1000,
+  "divergences": 0,
+  "num_chains": 4,
+  "total_time_s": 110.3,
+  "ess_per_sec": 3.6,
+  "min_ess_bulk": 393.1
+}
