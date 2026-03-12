@@ -20,9 +20,8 @@ makedocs(
     ],
 )
 
-deploydocs(
-    repo = "github.com/dan-sprague/PhaseSkate.git",
-    target = "build",
+DocumenterVitepress.deploydocs(;
+    repo = "github.com/dan-sprague/PhaseSkate",
     devbranch = "main",
     push_preview = true,
 )
