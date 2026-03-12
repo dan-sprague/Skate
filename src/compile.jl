@@ -36,12 +36,19 @@ function compile(source::String;
     libs = _find_jll_libs()
     threads = max(chains + 1, Threads.nthreads())
 
-    # Check for patched Enzyme
-    enzyme_dev = joinpath(homedir(), ".julia", "dev", "Enzyme")
-    if !isdir(enzyme_dev)
-        error("Patched Enzyme not found at $enzyme_dev.\n" *
-              "The Preferences-based JLL library path fix is required for compilation.\n" *
-              "See: https://github.com/EnzymeAD/Enzyme.jl (dev branch with LocalPreferences support)")
+    # Find patched Enzyme with Preferences-based JLL library path fix
+    enzyme_dev = ""
+    for candidate in [joinpath(homedir(), ".julia", "dev", "Enzyme"),
+                      joinpath(homedir(), "Documents", "Enzyme.jl")]
+        if isdir(candidate) && isfile(joinpath(candidate, "src", "api.jl"))
+            enzyme_dev = candidate
+            break
+        end
+    end
+    if isempty(enzyme_dev)
+        error("Patched Enzyme not found.\n" *
+              "Looked in: ~/.julia/dev/Enzyme, ~/Documents/Enzyme.jl\n" *
+              "The Preferences-based JLL library path fix is required for compilation.")
     end
 
     # Create build directory
@@ -50,15 +57,16 @@ function compile(source::String;
     println(build_dir)
 
     # Generate all build files
-    _write_project(build_dir, libs)
+    _write_project(build_dir, libs, enzyme_dev)
     gpu_stubs_path = _write_gpu_stubs(build_dir)
-    _write_juliac_wrapper(build_dir, gpu_stubs_path)
+    cc_wrapper = _write_cc_wrapper(build_dir, gpu_stubs_path)
     _write_entry_point(build_dir, source, model_name,
                        chains=chains, num_samples=num_samples,
                        warmup=warmup, max_depth=max_depth, ad=ad)
 
     # Run juliac
-    exe_path = _run_juliac(build_dir, output, threads)
+    juliac_jl = _find_juliac()
+    exe_path = _run_juliac(build_dir, juliac_jl, cc_wrapper, output, threads)
 
     printstyled("✓  Binary compiled: "; color=:green, bold=true)
     println(exe_path)
@@ -76,6 +84,98 @@ function _parse_model_name(source::String)
     m = match(r"@skate\s+(\w+)", source)
     m === nothing && error("Could not find @skate ModelName in source")
     return String(m[1])
+end
+
+
+## ── Helper: parse @constants field names and types ──────────────────────────
+
+"""
+    _parse_constants(source) → Vector{Tuple{String,String}}
+
+Extract (name, type_string) pairs from the `@constants` block in a `@skate` source.
+"""
+function _parse_constants(source::String)
+    m = match(r"@constants\s+begin\s*(.*?)\s*end"s, source)
+    m === nothing && error("Could not find @constants block in source")
+    block = m[1]
+    fields = Tuple{String,String}[]
+    for line in split(block, '\n')
+        line = strip(line)
+        isempty(line) && continue
+        fm = match(r"^(\w+)\s*::\s*(.+)$", line)
+        fm === nothing && continue
+        push!(fields, (String(fm[1]), strip(String(fm[2]))))
+    end
+    return fields
+end
+
+
+## ── Helper: generate statically-typed _load_data function ───────────────────
+
+"""
+    _gen_load_data(source, model_name) → String
+
+Generate a `_load_data` function body with statically-typed field parsing
+and a direct constructor call (no splatting).
+"""
+function _gen_load_data(source::String, model_name::String)
+    data_type = "$(model_name)Data"
+    const_fields = _parse_constants(source)
+
+    parse_lines = String[]
+    arg_names = String[]
+    for (fname, ftype) in const_fields
+        vname = "_f_$fname"
+        push!(arg_names, vname)
+        if ftype == "Int"
+            push!(parse_lines, """
+        haskey(fields, "$fname") || error("Missing field \\\"$fname\\\" in JSON")
+        $vname = parse(Int, fields["$fname"]::String)""")
+        elseif ftype == "Float64"
+            push!(parse_lines, """
+        haskey(fields, "$fname") || error("Missing field \\\"$fname\\\" in JSON")
+        $vname = parse(Float64, fields["$fname"]::String)""")
+        elseif ftype == "Vector{Float64}"
+            push!(parse_lines, """
+        haskey(fields, "$fname") || error("Missing field \\\"$fname\\\" in JSON")
+        $vname = Float64[parse(Float64, x) for x in fields["$fname"]::Vector{String}]""")
+        elseif ftype == "Vector{Int}"
+            push!(parse_lines, """
+        haskey(fields, "$fname") || error("Missing field \\\"$fname\\\" in JSON")
+        $vname = Int[parse(Int, x) for x in fields["$fname"]::Vector{String}]""")
+        elseif ftype == "Matrix{Float64}"
+            push!(parse_lines, """
+        haskey(fields, "$fname") || error("Missing field \\\"$fname\\\" in JSON")
+        $vname = begin
+            rows_raw = fields["$fname"]::Vector{String}
+            nrows = length(rows_raw)
+            first_row_vals, _ = _parse_array(rows_raw[1] * "]", 1)
+            ncols = length(first_row_vals)
+            mat = Matrix{Float64}(undef, nrows, ncols)
+            for r in 1:nrows
+                row_str = lstrip(rows_raw[r], ['[', ' '])
+                row_str = rstrip(row_str, [']', ' '])
+                parts = split(row_str, ',')
+                for c in 1:ncols
+                    mat[r, c] = parse(Float64, strip(parts[c]))
+                end
+            end
+            mat
+        end""")
+        else
+            error("Unsupported @constants field type: $ftype for field $fname")
+        end
+    end
+
+    constructor_args = join(arg_names, ", ")
+    parsed = join(parse_lines, "\n")
+
+    return """function _load_data(path::String)
+        raw = read(path, String)
+        fields = _parse_json_fields(raw)
+$parsed
+        return $data_type($constructor_args)
+    end"""
 end
 
 
@@ -150,35 +250,34 @@ function _write_gpu_stubs(build_dir::String)
 end
 
 
-## ── Helper: write patched juliac wrapper ────────────────────────────────────
+## ── Helper: find juliac.jl ───────────────────────────────────────────────────
 
-function _write_juliac_wrapper(build_dir::String, gpu_stubs_path::String)
-    # Find the real juliac.jl
-    juliac_jl = joinpath(Sys.BINDIR, "..", "share", "julia", "juliac.jl")
-    if !isfile(juliac_jl)
-        # Try alternate location
-        juliac_jl = joinpath(Sys.BINDIR, "juliac.jl")
+function _find_juliac()
+    for candidate in [joinpath(Sys.BINDIR, "..", "share", "julia", "juliac", "juliac.jl"),
+                      joinpath(Sys.BINDIR, "..", "share", "julia", "juliac.jl"),
+                      joinpath(Sys.BINDIR, "juliac.jl")]
+        isfile(candidate) && return candidate
     end
-    isfile(juliac_jl) || error("Cannot find juliac.jl (looked at $(joinpath(Sys.BINDIR, "..", "share", "julia", "juliac.jl")))")
+    error("Cannot find juliac.jl — is this Julia 1.12+?")
+end
 
-    original = read(juliac_jl, String)
 
-    # Patch: intercept the linker command to add gpu_stubs.o
-    # juliac.jl uses run(`cc ... -o <exe> ...`) — we insert the stubs .o into that command
-    stub = repr(gpu_stubs_path)
-    patched = replace(original,
-        r"run\(cmd\)" => "# Patched by PhaseSkate: inject GPU stubs\ncmd = `\$cmd $stub`\nrun(cmd)")
+## ── Helper: write CC wrapper to inject GPU stubs ────────────────────────────
 
-    wrapper_path = joinpath(build_dir, "juliac_patched.jl")
-    write(wrapper_path, patched)
+function _write_cc_wrapper(build_dir::String, gpu_stubs_path::String)
+    wrapper_path = joinpath(build_dir, "cc_wrapper.sh")
+    write(wrapper_path, """
+    #!/bin/sh
+    exec cc "\$@" $gpu_stubs_path
+    """)
+    run(`chmod +x $wrapper_path`)
     return wrapper_path
 end
 
 
 ## ── Helper: write Project.toml + LocalPreferences.toml ──────────────────────
 
-function _write_project(build_dir::String, libs::Dict{String,String})
-    # Project.toml
+function _write_project(build_dir::String, libs::Dict{String,String}, enzyme_path::String)
     project_toml = joinpath(build_dir, "Project.toml")
     phaseskate_path = dirname(dirname(@__FILE__))  # src/../ = project root
 
@@ -193,6 +292,9 @@ function _write_project(build_dir::String, libs::Dict{String,String})
 
     [sources.PhaseSkate]
     path = $(repr(phaseskate_path))
+
+    [sources.Enzyme]
+    path = $(repr(enzyme_path))
     """)
 
     # LocalPreferences.toml — bake JLL library paths
@@ -227,6 +329,7 @@ function _write_entry_point(build_dir::String, source::String, model_name::Strin
 
     using PhaseSkate
     using PhaseSkate: ParamInfo
+    using Enzyme
 
     # ── Model definition (baked in) ──
     $source
@@ -324,53 +427,7 @@ function _write_entry_point(build_dir::String, source::String, model_name::Strin
         return fields
     end
 
-    function _load_data(path::String)
-        raw = read(path, String)
-        fields = _parse_json_fields(raw)
-
-        T = $data_type
-        fnames = fieldnames(T)
-        ftypes = fieldtypes(T)
-
-        args = []
-        for (fn, ft) in zip(fnames, ftypes)
-            key = String(fn)
-            haskey(fields, key) || error("Missing field \\\"" * key * "\\\" in JSON")
-            v = fields[key]
-
-            if ft == Int
-                push!(args, parse(Int, v::String))
-            elseif ft == Float64
-                push!(args, parse(Float64, v::String))
-            elseif ft <: Vector{Float64}
-                push!(args, Float64[parse(Float64, x) for x in v::Vector{String}])
-            elseif ft <: Vector{Int}
-                push!(args, Int[parse(Int, x) for x in v::Vector{String}])
-            elseif ft <: Matrix{Float64}
-                # v is a Vector of row strings like "[1.0, 2.0]"
-                rows_raw = v::Vector{String}
-                nrows = length(rows_raw)
-                first_row_vals, _ = _parse_array(rows_raw[1] * "]", 1)  # re-parse inner
-                ncols = length(first_row_vals)
-                mat = Matrix{Float64}(undef, nrows, ncols)
-                for r in 1:nrows
-                    row_str = rows_raw[r]
-                    # strip leading [ if present
-                    row_str = lstrip(row_str, ['[', ' '])
-                    row_str = rstrip(row_str, [']', ' '])
-                    parts = split(row_str, ',')
-                    for c in 1:ncols
-                        mat[r, c] = parse(Float64, strip(parts[c]))
-                    end
-                end
-                push!(args, mat)
-            else
-                error("Unsupported field type: " * string(ft) * " for field " * key)
-            end
-        end
-
-        return T(args...)
-    end
+    $(_gen_load_data(source, model_name))
 
     # ── Argument parsing ──
 
@@ -444,13 +501,13 @@ function _write_entry_point(build_dir::String, source::String, model_name::Strin
     function (@main)(ARGS::Vector{String})::Cint
         opts = _parse_args(ARGS)
         if opts === nothing
-            Core.println("Usage: $(Base.PROGRAM_FILE) data.json [options]")
+            Core.println("Usage: " * Base.PROGRAM_FILE * " data.json [options]")
             Core.println()
             Core.println("Options:")
-            Core.println("  --chains=N      Number of chains (default: $($chains))")
-            Core.println("  --samples=N     Samples per chain (default: $($num_samples))")
-            Core.println("  --warmup=N      Warmup iterations (default: $($warmup))")
-            Core.println("  --max-depth=N   Max tree depth (default: $($max_depth))")
+            Core.println("  --chains=N      Number of chains (default: $chains)")
+            Core.println("  --samples=N     Samples per chain (default: $num_samples)")
+            Core.println("  --warmup=N      Warmup iterations (default: $warmup)")
+            Core.println("  --max-depth=N   Max tree depth (default: $max_depth)")
             Core.println("  --output=FILE   Write CSV samples to FILE")
             Core.println("  --seed=INT      Random seed")
             return Cint(1)
@@ -461,11 +518,11 @@ function _write_entry_point(build_dir::String, source::String, model_name::Strin
         data = _load_data(opts.data_file)
         model = make(data)
 
-        Core.println("Model: $($repr(model_name))  dim=" * string(model.dim))
+        Core.println("Model: $model_name  dim=" * string(model.dim))
         Core.println("Chains: " * string(opts.chains) * "  Samples: " * string(opts.samples) *
                      "  Warmup: " * string(opts.warmup))
 
-        # Sample using invokelatest to defer Enzyme codegen
+        # Sample — invokelatest defers Enzyme gradient compilation to runtime
         chains_result = Base.invokelatest(
             PhaseSkate.sample, model, opts.samples;
             warmup=opts.warmup, chains=opts.chains,
@@ -491,18 +548,18 @@ end
 
 ## ── Helper: run juliac ──────────────────────────────────────────────────────
 
-function _run_juliac(build_dir::String, output::String, threads::Int)
+function _run_juliac(build_dir::String, juliac_jl::String, cc_wrapper::String,
+                     output::String, threads::Int)
     entry_point = joinpath(build_dir, "model_main.jl")
-    wrapper = joinpath(build_dir, "juliac_patched.jl")
     exe_path = joinpath(build_dir, output)
 
-    # Find julia binary
     julia_exe = joinpath(Sys.BINDIR, "julia")
 
     printstyled("◆  Running juliac "; color=:cyan, bold=true)
     printstyled("(this takes several minutes)\n"; color=:light_black)
 
-    cmd = `$julia_exe --project=$build_dir $wrapper --output-exe $exe_path -t $threads $entry_point`
+    cmd = `$julia_exe -t $threads --project=$build_dir $juliac_jl --output-exe $exe_path $entry_point`
+    cmd = addenv(cmd, "JULIA_CC" => cc_wrapper)
     printstyled("   "; color=:light_black)
     printstyled(string(cmd); color=:light_black)
     println()

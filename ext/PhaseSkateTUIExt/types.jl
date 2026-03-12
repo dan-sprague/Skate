@@ -34,6 +34,10 @@ mutable struct IDEModel <: Tachikoma.Model
     editor::CodeEditor
     compile_error::Union{Nothing, String}
 
+    # Mouse selection in editor (anchor = where drag started)
+    sel_anchor::Union{Nothing, Tuple{Int,Int}}  # (row, col) or nothing
+    sel_active::Bool                             # true while dragging
+
     # Model state
     model::Union{Nothing, PhaseSkate.ModelLogDensity}
 
@@ -59,6 +63,12 @@ mutable struct IDEModel <: Tachikoma.Model
     selected_param_idx::Int
     param_labels::Vector{String}
     diagnostics_rows::Vector{PhaseSkate._RowSummary}
+    diagnostics_scroll::Int
+
+    # Cumulative chain statistics (running averages)
+    chain_cum_accept::Vector{Float64}
+    chain_cum_depth::Vector{Float64}
+    chain_cum_n::Vector{Int}
 
     # System
     tq::Tachikoma.TaskQueue
@@ -73,24 +83,42 @@ mutable struct IDEModel <: Tachikoma.Model
 
     # Sampling kwargs for pass-through
     sampling_kwargs::NamedTuple
+
+    # Cached layout areas for mouse hit-testing (updated each frame)
+    _editor_area::Rect
+    _output_area::Rect
+    _repl_area::Rect
+    _tab_bar_area::Rect
+
+    # Live sampling: accumulate raw (unconstrained) samples for real-time views
+    live_view::Bool                             # false to disable live streaming (zero overhead)
+    live_raw::Vector{Vector{Vector{Float64}}}  # live_raw[chain][sample_idx] = q vector
+    live_constrain::Union{Nothing, Function}    # model.constrain for building live Chains
+    live_update_counter::Int                    # samples received since last live Chains rebuild
+
+    # Data-awareness
+    defined_constants::Set{String}
 end
 
 ## ── Constructors ─────────────────────────────────────────────────────────────
 
-const _DEFAULT_MODEL_SOURCE = """@skate MyModel begin
+const _DEFAULT_MODEL_SOURCE = """@skate Schools begin
     @constants begin
-        N::Int
+        J::Int
         y::Vector{Float64}
+        sigma::Vector{Float64}
     end
     @params begin
         mu::Float64
-        sigma = param(Float64; lower=0.0)
+        tau = param(Float64; lower=0.0)
+        theta_raw = param(Vector{Float64}, J)
     end
     @logjoint begin
-        target += normal_lpdf(mu, 0.0, 10.0)
-        target += exponential_lpdf(sigma, 1.0)
-        for i in 1:N
-            target += normal_lpdf(y[i], mu, sigma)
+        target += normal_lpdf(mu, 0.0, 5.0)
+        target += cauchy_lpdf(tau, 0.0, 5.0)
+        for j in 1:J
+            target += normal_lpdf(theta_raw[j], 0.0, 1.0)
+            target += normal_lpdf(y[j], mu + tau * theta_raw[j], sigma[j])
         end
     end
 end
@@ -107,6 +135,7 @@ function IDEModel(;
     ad=:auto,
     model_source=_DEFAULT_MODEL_SOURCE,
     sampling_kwargs=(;),
+    live_view=true,
 )
     channel = Channel{Any}(1024)
 
@@ -133,6 +162,8 @@ function IDEModel(;
         initial_tab,
         editor,
         nothing,            # compile_error
+        nothing,            # sel_anchor
+        false,              # sel_active
         model,
         ChainProgress[],    # chain_progress
         n_chains,
@@ -148,6 +179,10 @@ function IDEModel(;
         1,
         param_labels,
         diagnostics_rows,
+        0,                  # diagnostics_scroll
+        Float64[],          # chain_cum_accept
+        Float64[],          # chain_cum_depth
+        Int[],              # chain_cum_n
         Tachikoma.TaskQueue(),
         nothing,            # repl_widget
         false,
@@ -156,6 +191,15 @@ function IDEModel(;
         String[],           # binary_output
         nothing,            # binary_path
         sampling_kwargs,
+        Rect(0, 0, 0, 0),  # _editor_area
+        Rect(0, 0, 0, 0),  # _output_area
+        Rect(0, 0, 0, 0),  # _repl_area
+        Rect(0, 0, 0, 0),  # _tab_bar_area
+        live_view,          # live_view
+        Vector{Vector{Float64}}[], # live_raw
+        nothing,            # live_constrain
+        0,                  # live_update_counter
+        Set{String}(),      # defined_constants
     )
 end
 

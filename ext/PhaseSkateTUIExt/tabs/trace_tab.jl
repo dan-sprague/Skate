@@ -2,36 +2,36 @@
 
 function _render_trace_tab(m::IDEModel, area::Rect, buf::Buffer)
     if m.chains === nothing
-        render(Paragraph("No chains available yet"; block=Block(; title="Traces")), area, buf)
+        msg = if !isempty(m.chain_progress)
+            "Warming up..."
+        else
+            "Waiting for sampling"
+        end
+        render(Paragraph(msg; block=Block(; title="Traces")), area, buf)
         return
     end
 
-    layout = Layout(Horizontal, [Fixed(min(25, area.width ÷ 4)), Fill()])
-    areas = split_layout(layout, area)
-
-    # Parameter selector
-    list = SelectableList(m.param_labels; selected=m.selected_param_idx,
-                          block=Block(; title="Parameters"))
-    render(list, areas[1], buf)
-
-    # Trace plot
     idx = clamp(m.selected_param_idx, 1, length(m.param_labels))
     col = _param_col(m.chains, idx)
+    ns = size(m.chains.data, 1)
     nc = size(m.chains.data, 3)
 
-    chain_colors = [tstyle(:primary), tstyle(:secondary), tstyle(:accent), tstyle(:success),
-                    tstyle(:warning), tstyle(:error)]
+    # Julia brand colors: blue, purple, green, red
+    chain_colors = [tstyle(:primary), tstyle(:secondary), tstyle(:accent), tstyle(:error),
+                    tstyle(:warning), tstyle(:text_bright)]
 
     series = DataSeries[]
     for c in 1:nc
         ys = Float64.(m.chains.data[:, col, c])
         style = chain_colors[mod1(c, length(chain_colors))]
-        push!(series, DataSeries(ys; label="Chain $c", style=style))
+        push!(series, DataSeries(ys; label="Ch$c", style=style))
     end
 
-    chart = Chart(series; block=Block(; title="Trace: $(m.param_labels[idx])"),
-                  x_label="Iteration", y_label="Value", show_legend=nc <= 6)
-    render(chart, areas[2], buf)
+    label = m.param_labels[idx]
+    n_info = m.sampling_done ? "" : " (n=$(ns))"
+    chart = Chart(series; block=Block(; title="Trace: $(label)$(n_info)"),
+                  x_label="Iteration", y_label="Value", show_legend=nc <= 4)
+    render(chart, area, buf)
 end
 
 """Map a flat parameter index to its column in chains.data."""

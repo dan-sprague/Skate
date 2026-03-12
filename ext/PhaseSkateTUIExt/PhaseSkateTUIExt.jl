@@ -6,8 +6,9 @@ using Tachikoma: @tachikoma_app, Layout, Vertical, Horizontal, Fixed, Fill,
                  split_layout, Block, Paragraph, Span, Gauge, BarChart, BarEntry,
                  Chart, DataSeries, DataTable, DataColumn, TabBar, StatusBar,
                  SelectableList, ScrollPane, REPLWidget, CodeEditor, Rect, Buffer,
-                 render, tstyle, word_wrap, TaskQueue,
-                 handle_key!, drain!, close!
+                 render, tstyle, word_wrap, TaskQueue, Terminal, Event,
+                 handle_key!, drain!, close!,
+                 MouseEvent, mouse_left, mouse_press, set_char!
 using Statistics: quantile
 using Random: randn
 
@@ -44,6 +45,7 @@ density histograms, SBC visualization, and an embedded Julia REPL.
 - `chains_count::Int=4`: Number of parallel chains.
 - `max_depth::Int=10`: Maximum NUTS tree depth.
 - `ad::Symbol=:auto`: Autodiff mode (`:auto`, `:forward`, `:reverse`).
+- `live_view::Bool=true`: Stream live diagnostics/traces/density during sampling. Set `false` to disable (zero overhead).
 """
 function PhaseSkate.app(;
     model_source::String=_DEFAULT_MODEL_SOURCE,
@@ -55,6 +57,8 @@ function PhaseSkate.app(;
     chains_count::Int=4,
     max_depth::Int=10,
     ad::Symbol=:auto,
+    live_view::Bool=true,
+    tty_out::Union{Nothing, String}=nothing,
 )
     m = IDEModel(;
         model=model,
@@ -66,9 +70,10 @@ function PhaseSkate.app(;
         max_depth=max_depth,
         ad=ad,
         model_source=model_source,
+        live_view=live_view,
     )
 
-    Tachikoma.app(m; default_bindings=false)
+    Tachikoma.app(m; default_bindings=false, tty_out=tty_out)
 
     m.chains
 end

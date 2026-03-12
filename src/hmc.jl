@@ -459,6 +459,7 @@ _tree_depth(n_leapfrog::Int) = n_leapfrog > 0 ? floor(Int, log2(n_leapfrog)) : 0
 
 function _make_grad(model; ad = :auto)
     dim = model.dim
+
     use_forward = if ad == :forward
         true
     elseif ad == :reverse
@@ -667,7 +668,8 @@ function _run_chain(rng, model, num_samples, ϵ₀, max_depth, warmup, ∇!; cha
                                 step_size=ϵ_adapted, tree_depth=_tree_depth(ns.n_leapfrog[]),
                                 accept_rate=min(1.0, ns.sum_metro_prob[] / max(1, ns.n_leapfrog[])),
                                 n_divergent=n_divergent,
-                                elapsed_ns=time_ns() - t_sample_start))
+                                elapsed_ns=time_ns() - t_sample_start,
+                                q=copy(z.q)))
             catch; end
         end
     end

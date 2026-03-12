@@ -32,7 +32,7 @@ include("chains.jl")
 include("lang.jl")
 include("adjoints.jl")
 include("sbc.jl")
-# include("compile.jl")  # WIP — has syntax issues with $ in triple-quoted strings
+include("compile.jl")
 
 """
     app(; kwargs...)

@@ -3,73 +3,81 @@
 function _render_sampling_tab(m::IDEModel, area::Rect, buf::Buffer)
     if isempty(m.chain_progress) && !m.sampling_done
         # Pre-sampling state
-        msg = if m.benchmark_done
+        msg = if m.model === nothing
+            "Ready — define data in the REPL, then press F5 to compile and run"
+        elseif m.benchmark_done
             est = _format_time(m.estimated_seconds)
-            "Estimated sampling time: ~$est  (gradient: $(round(m.grad_μs; digits=1)) μs/eval)"
+            "~$est  (grad: $(round(m.grad_μs; digits=1)) μs)"
         else
-            "Compiling gradient and benchmarking..."
+            "Compiling gradient..."
         end
         render(Paragraph(msg; wrap=word_wrap,
                block=Block(; title="Sampling")), area, buf)
         return
     end
 
-    if m.sampling_done && m.chains !== nothing
-        render(Paragraph("Sampling complete — switch to Diagnostics (2) or Traces (3)";
-               wrap=word_wrap, block=Block(; title="Sampling ✓")), area, buf)
-        return
-    end
+    # Always show gauges + stats (even after done)
+    title = m.sampling_done ? "Sampling ✓" : "Sampling"
 
-    # Layout: one gauge row per chain + stats table below
     n = m.n_chains
-    gauge_height = min(n * 2 + 1, area.height ÷ 2)
+    gauge_height = min(n + 1, max(area.height ÷ 2, n + 1))
     layout = Layout(Vertical, [Fixed(gauge_height), Fill()])
     areas = split_layout(layout, area)
 
-    # ── Gauges ──
-    gauge_layout = Layout(Vertical, [Fixed(2) for _ in 1:n])
+    # ── Gauges (1 row each) ──
+    gauge_layout = Layout(Vertical, [Fixed(1) for _ in 1:n])
     gauge_areas = split_layout(gauge_layout, areas[1])
 
     for i in 1:min(n, length(gauge_areas))
         cp = _latest_progress(m, i)
         if cp === nothing
-            label = "Chain $i: waiting..."
+            label = "Ch$i: waiting..."
             ratio = 0.0
         else
-            phase_label = cp.phase == :warmup ? "warmup" : "sampling"
-            pct = cp.total > 0 ? round(Int, 100 * cp.iteration / cp.total) : 0
-            label = "Chain $i [$phase_label] $(cp.iteration)/$(cp.total) ($pct%)"
-            ratio = cp.total > 0 ? clamp(cp.iteration / cp.total, 0.0, 1.0) : 0.0
-            if cp.phase == :warmup
-                ratio *= 0.5  # warmup is first half
+            if cp.phase == :done || m.sampling_done
+                label = "Ch$i ✓ $(cp.total)"
+                ratio = 1.0
             else
-                ratio = 0.5 + ratio * 0.5  # sampling is second half
+                ph = cp.phase == :warmup ? "w" : "s"
+                pct = cp.total > 0 ? round(Int, 100 * cp.iteration / cp.total) : 0
+                label = "Ch$i [$ph] $(cp.iteration)/$(cp.total)"
+                ratio = cp.total > 0 ? clamp(cp.iteration / cp.total, 0.0, 1.0) : 0.0
+                if cp.phase == :warmup
+                    ratio *= 0.5
+                else
+                    ratio = 0.5 + ratio * 0.5
+                end
             end
         end
-        gauge = Gauge(ratio; label=label,
-                      block=nothing,
-                      filled_style=tstyle(:primary))
+        style = m.sampling_done ? tstyle(:success) : tstyle(:primary)
+        gauge = Gauge(ratio; label=label, block=nothing, filled_style=style)
         render(gauge, gauge_areas[i], buf)
     end
 
-    # ── Stats table ──
+    # ── Compact stats table with CUMULATIVE averages ──
     if !isempty(m.chain_progress)
-        headers = ["Chain", "Phase", "ε", "Depth", "Accept", "Divergent", "Elapsed"]
-        cols = [String[] for _ in 1:7]
+        headers = ["Ch", "ε", "Avg Dp", "Avg Acc", "Div"]
+        cols = [String[] for _ in 1:5]
         for i in 1:n
             cp = _latest_progress(m, i)
             cp === nothing && continue
             push!(cols[1], string(cp.chain_id))
-            push!(cols[2], string(cp.phase))
-            push!(cols[3], string(round(cp.step_size; sigdigits=4)))
-            push!(cols[4], string(cp.tree_depth))
-            push!(cols[5], string(round(cp.accept_rate; digits=3)))
-            push!(cols[6], string(cp.n_divergent))
-            push!(cols[7], _format_time(cp.elapsed_ns / 1e9))
+            push!(cols[2], string(round(cp.step_size; sigdigits=3)))
+            # Cumulative averages
+            if i <= length(m.chain_cum_n) && m.chain_cum_n[i] > 0
+                avg_depth = m.chain_cum_depth[i] / m.chain_cum_n[i]
+                avg_accept = m.chain_cum_accept[i] / m.chain_cum_n[i]
+                push!(cols[3], string(round(avg_depth; digits=1)))
+                push!(cols[4], string(round(avg_accept; digits=2)))
+            else
+                push!(cols[3], string(cp.tree_depth))
+                push!(cols[4], string(round(cp.accept_rate; digits=2)))
+            end
+            push!(cols[5], string(cp.n_divergent))
         end
         if !isempty(cols[1])
             dt = DataTable(headers, Vector{AbstractVector}(cols);
-                           block=Block(; title="Chain Statistics"))
+                           block=Block(; title=title))
             render(dt, areas[2], buf)
         end
     end

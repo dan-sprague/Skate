@@ -1,7 +1,10 @@
 [deps]
+CairoMakie = "13f3f980-e62b-5c42-98c6-ff1f3baf88f0"
 Documenter = "e30172f5-a6a5-5a46-863b-614d45cd2de4"
 DocumenterVitepress = "4710194d-e776-4893-9690-8d956a29c365"
+JSON3 = "0f8b85d8-7281-11e9-16c2-39a750bddbf1"
 PhaseSkate = "d9f16b3c-1d8e-11eb-0a9c-5b1e7cfae1b2"
+WGLMakie = "276b4fcb-3e11-5398-bf8b-a0c2d153d008"
 
 [sources]
-PhaseSkate = {path = "/Users/dansprague/Documents/PhaseSkate"}
+PhaseSkate = {path = ".."}
