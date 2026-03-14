@@ -13,10 +13,6 @@ sidebar: false
   <p class="ps-hero-text">Bayesian Inference In Julia</p>
   <p class="ps-hero-tagline">Fast sampling built for complex models on your laptop.</p>
 
-  <div class="ps-hero-highlight">
-    All log-PDF functions are implemented as pure arithmetic (no foreign library calls) to remain fully differentiable by Enzyme.
-  </div>
-
   <div class="ps-hero-actions">
     <a class="ps-btn ps-btn-brand" href="/getting_started">Getting Started</a>
     <a class="ps-btn ps-btn-alt" href="/api">API Reference</a>

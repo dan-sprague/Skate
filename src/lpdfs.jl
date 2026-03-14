@@ -1,6 +1,8 @@
-# Lanczos approximation for loggamma — pure arithmetic, no foreign calls.
-# Enzyme can differentiate this trivially (only +, -, *, /, log).
-# Lanczos g=7, n=9 coefficients — ~15 digits precision for Re(z) > 0.5.
+"""
+    _loggamma(z)
+
+Lanczos approximation of log-gamma. Pure arithmetic for Enzyme compatibility.
+"""
 function _loggamma(z)
     x = float(z) - 1.0
     t = x + 7.5
@@ -16,6 +18,11 @@ function _loggamma(z)
     return 0.5 * log(2π) + (x + 0.5) * log(t) - t + log(s)
 end
 
+"""
+    _logbeta(a, b)
+
+Log of the beta function via Lanczos log-gamma.
+"""
 _logbeta(a, b) = _loggamma(a) + _loggamma(b) - _loggamma(a + b)
 
 """
@@ -77,7 +84,11 @@ function multi_normal_cholesky_lpdf(x, μ::Real, L)
     return -T(0.5) * quad - log_det - T(0.5) * k * log(T(2π))
 end
 
-# Scalar μ, σ — zero allocations.
+"""
+    multi_normal_diag_lpdf(x, μ, σ)
+
+Log-density of a diagonal multivariate normal. Supports scalar or vector μ and σ.
+"""
 function multi_normal_diag_lpdf(x, μ::Real, σ::Real)
     σ_safe = max(σ, eps(typeof(float(σ))))
     n = length(x)
@@ -148,16 +159,31 @@ function normal_lpdf(x, μ, σ)
     return -log(σ_safe) - 0.5 * log(2π) - 0.5 * abs2((x - μ) / σ_safe)
 end
 
+"""
+    cauchy_lpdf(x, μ, γ) → Float64
+
+Log-density of the Cauchy distribution.
+"""
 function cauchy_lpdf(x, μ, γ)
     γ_safe = max(γ, eps(typeof(float(γ))))
     return -log(π) + log(γ_safe) - log(abs2(x - μ) + abs2(γ_safe))
 end
 
+"""
+    exponential_lpdf(x, λ) → Float64
+
+Log-density of the exponential distribution with mean λ.
+"""
 function exponential_lpdf(x, λ)
     λ_safe = max(λ, eps(typeof(float(λ))))
     return -log(λ_safe) - x / λ_safe
 end
 
+"""
+    gamma_lpdf(x, α, β) → Float64
+
+Log-density of the Gamma(α, β) distribution (shape-rate).
+"""
 function gamma_lpdf(x, α, β)
     x_safe = max(x, eps(typeof(float(x))))
     α_safe = max(α, eps(typeof(float(α))))
@@ -165,23 +191,43 @@ function gamma_lpdf(x, α, β)
     return α_safe * log(β_safe) - _loggamma(α_safe) + (α_safe - 1) * log(x_safe) - β_safe * x_safe
 end
 
+"""
+    poisson_lpdf(x, λ) → Float64
+
+Log-density of the Poisson distribution.
+"""
 function poisson_lpdf(x, λ)
     λ_safe = max(λ, eps(typeof(float(λ))))
     return x * log(λ_safe) - λ_safe - _loggamma(x + 1)
 end
 
+"""
+    binomial_lpdf(x, n, p) → Float64
+
+Log-density of the binomial distribution.
+"""
 function binomial_lpdf(x, n, p)
     p_safe = clamp(p, eps(typeof(float(p))), one(p) - eps(typeof(float(p))))
     log_n_choose_x = -log(n + 1) - _logbeta(n - x + 1, x + 1)
     return log_n_choose_x + x * log(p_safe) + (n - x) * log(1 - p_safe)
 end
 
+"""
+    beta_binomial_lpdf(x, n, α, β) → Float64
+
+Log-density of the beta-binomial distribution.
+"""
 function beta_binomial_lpdf(x, n, α, β)
     α_safe = max(α, eps(typeof(float(α))))
     β_safe = max(β, eps(typeof(float(β))))
     return -log(n + 1) - _logbeta(n - x + 1, x + 1) + _logbeta(x + α_safe, n - x + β_safe) - _logbeta(α_safe, β_safe)
 end
 
+"""
+    weibull_lpdf(x, α, σ) → Float64
+
+Log-density of the Weibull distribution (shape α, scale σ).
+"""
 function weibull_lpdf(x, α, σ)
     x_safe = max(x, eps(typeof(float(x))))
     σ_safe = max(σ, eps(typeof(float(σ))))
@@ -189,6 +235,11 @@ function weibull_lpdf(x, α, σ)
     return log(α_safe) - log(σ_safe) + (α_safe - 1) * (log(x_safe) - log(σ_safe)) - (x_safe / σ_safe)^α_safe
 end
 
+"""
+    weibull_lccdf(x, α, σ) → Float64
+
+Log complementary CDF of the Weibull distribution.
+"""
 function weibull_lccdf(x, α, σ)
     x_safe = max(x, zero(x))
     σ_safe = max(σ, eps(typeof(float(σ))))
@@ -232,12 +283,22 @@ function binomial_logit_lpdf(y, n, α)
     return log_n_choose_y + y * α - n * (log1p(exp(-abs(α))) + max(zero(α), α))
 end
 
+"""
+    weibull_logsigma_lpdf(x, α, log_σ) → Float64
+
+Log-density of the Weibull distribution with log-scale parameterization.
+"""
 function weibull_logsigma_lpdf(x, α, log_σ)
     x_safe = max(x, eps(typeof(float(x))))
     α_safe = max(α, eps(typeof(float(α))))
     return log(α_safe) - log_σ + (α_safe - 1) * (log(x_safe) - log_σ) - exp(α_safe * (log(x_safe) - log_σ))
 end
 
+"""
+    categorical_logit_lpdf(y, α_vec) → Float64
+
+Log-density of the categorical distribution with logit parameterization.
+"""
 function categorical_logit_lpdf(y, α_vec)
     return α_vec[Int(y)] - log_sum_exp(α_vec)
 end
@@ -322,7 +383,11 @@ function lkj_corr_cholesky_lpdf(L, η)
     return s
 end
 
-# Beta: logpdf(Beta(α, β), x)
+"""
+    beta_lpdf(x, α, β) → Float64
+
+Log-density of the Beta distribution.
+"""
 function beta_lpdf(x, α, β)
     (x < 0 || x > 1) && return oftype(float(x), -Inf)
     x_safe = clamp(x, eps(typeof(float(x))), one(x) - eps(typeof(float(x))))
@@ -331,12 +396,22 @@ function beta_lpdf(x, α, β)
     return (α_safe - 1)*log(x_safe) + (β_safe - 1)*log(1 - x_safe) - _logbeta(α_safe, β_safe)
 end
 
+"""
+    lognormal_lpdf(x, μ, σ) → Float64
+
+Log-density of the log-normal distribution.
+"""
 function lognormal_lpdf(x, μ, σ)
     x_safe = max(x, eps(typeof(float(x))))
     σ_safe = max(σ, eps(typeof(float(σ))))
     return -log(x_safe) - log(σ_safe) - 0.5*log(2π) - 0.5*((log(x_safe) - μ)/σ_safe)^2
 end
 
+"""
+    student_t_lpdf(x, ν, μ, σ) → Float64
+
+Log-density of the Student-t distribution.
+"""
 function student_t_lpdf(x, ν, μ, σ)
     σ_safe = max(σ, eps(typeof(float(σ))))
     ν_safe = max(ν, eps(typeof(float(ν))))
@@ -346,6 +421,11 @@ function student_t_lpdf(x, ν, μ, σ)
            0.5*(ν_safe + 1)*log(1 + z^2/ν_safe)
 end
 
+"""
+    dirichlet_lpdf(x, α) → Float64
+
+Log-density of the Dirichlet distribution.
+"""
 function dirichlet_lpdf(x, α)
     K = length(x)
     length(α) == K || error("dirichlet_lpdf: x and α must have the same length")
@@ -383,16 +463,31 @@ function dirichlet_lpdf(x, α::Real)
     return _loggamma(K * α_safe) - K * _loggamma(α_safe) + kernel
 end
 
+"""
+    uniform_lpdf(x, lo, hi) → Float64
+
+Log-density of the uniform distribution on [lo, hi].
+"""
 function uniform_lpdf(x, lo, hi)
     lo >= hi && throw(ArgumentError("uniform_lpdf: lo must be < hi"))
     return -log(hi - lo)
 end
 
+"""
+    laplace_lpdf(x, μ, b) → Float64
+
+Log-density of the Laplace distribution.
+"""
 function laplace_lpdf(x, μ, b)
     b_safe = max(b, eps(typeof(float(b))))
     return -log(2*b_safe) - abs(x - μ)/b_safe
 end
 
+"""
+    logistic_lpdf(x, μ, s) → Float64
+
+Log-density of the logistic distribution.
+"""
 function logistic_lpdf(x, μ, s)
     s_safe = max(s, eps(typeof(float(s))))
     z = (x - μ) / s_safe

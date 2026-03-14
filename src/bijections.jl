@@ -1,5 +1,6 @@
 abstract type Constraint end
 
+"""No-op constraint for unconstrained parameters."""
 struct IdentityConstraint <: Constraint end
 transform(::IdentityConstraint, x) = x
 log_abs_det_jacobian(::IdentityConstraint, x) = zero(typeof(x))
@@ -10,15 +11,17 @@ abstract type ExpBijection <: Constraint end
 log_abs_det_jacobian(::ExpBijection, x) = x
 grad_correction(::ExpBijection, x) = exp(x)
 
+"""Exp transform enforcing `x > lb`."""
 struct LowerBounded{T} <: ExpBijection lb::T end
 LowerBounded(lb::Real) = LowerBounded{Float64}(Float64(lb))
 transform(c::LowerBounded, x) = c.lb + exp(x)
 
+"""Exp transform enforcing `x < ub`."""
 struct UpperBounded{T} <: ExpBijection ub::T end
 UpperBounded(ub::Real) = UpperBounded{Float64}(Float64(ub))
 transform(c::UpperBounded, x) = c.ub - exp(x)
 
-# ── Bounded (logistic sigmoid) ────────────────────────────────────────────────
+"""Logistic-sigmoid transform enforcing `lb < x < ub`."""
 struct Bounded{T} <: Constraint
     lb::T
     ub::T
@@ -48,13 +51,14 @@ function grad_correction(c::Bounded, x)
     (c.ub - c.lb) * s * (one(s) - s)
 end
 
-# ── Simplex (stick-breaking transform) ───────────────────────────────────────
-# Maps K-1 unconstrained reals → K-simplex.
-# y_k = z_k * remaining,  where z_k = logistic(x_k - log(K - k))
-# The centering adjustment -log(K-k) makes the uniform prior map to the
-# center of the simplex.
+"""Stick-breaking transform mapping K-1 reals to a K-simplex."""
 struct SimplexConstraint <: Constraint end
 
+"""
+    simplex_transform(y) → (x, log_jac)
+
+Apply stick-breaking simplex transform, returning `(x, log_jac)`.
+"""
 function simplex_transform(y::AbstractVector{<:Real})
     Km1 = length(y)
     K = Km1 + 1
@@ -63,6 +67,11 @@ function simplex_transform(y::AbstractVector{<:Real})
     return x, log_jac
 end
 
+"""
+    simplex_transform!(x, y) → log_jac
+
+In-place stick-breaking simplex transform. Returns log Jacobian determinant.
+"""
 function simplex_transform!(x::AbstractVector{<:Real}, y::AbstractVector{<:Real})
     Km1 = length(y)
     K = Km1 + 1
@@ -80,8 +89,7 @@ function simplex_transform!(x::AbstractVector{<:Real}, y::AbstractVector{<:Real}
     return log_jac
 end
 
-# ── Ordered (cumulative exp transform) ───────────────────────────────────────
-# Maps K unconstrained reals → K ordered reals: y₁ = x₁, yₖ = yₖ₋₁ + exp(xₖ)
+"""Cumulative-exp transform producing ordered reals."""
 struct OrderedConstraint <: Constraint end
 
 function transform(::OrderedConstraint, x::AbstractVector{<:Real})
@@ -97,6 +105,11 @@ function log_abs_det_jacobian(::OrderedConstraint, x::AbstractVector{<:Real})
     sum(@view x[2:end])
 end
 
+"""
+    ordered_transform(x) → (y, log_jac)
+
+Apply ordered transform, returning `(y, log_jac)`.
+"""
 function ordered_transform(x::AbstractVector{<:Real})
     K = length(x)
     y = similar(x)
@@ -104,6 +117,11 @@ function ordered_transform(x::AbstractVector{<:Real})
     return y, log_jac
 end
 
+"""
+    ordered_transform!(y, x) → log_jac
+
+In-place ordered transform. Returns log Jacobian determinant.
+"""
 function ordered_transform!(y::AbstractVector{<:Real}, x::AbstractVector{<:Real})
     y[1] = x[1]
     log_jac = zero(eltype(x))
@@ -128,6 +146,11 @@ end
 # ordering y[k,1] across rows guarantees phi[1,1] < phi[2,1] < ... < phi[K,1].
 # Total free params: K + K*(V-2) = K*(V-1), same as pure row simplex.
 
+"""
+    ordered_simplex_matrix!(mat, q, K, V) → log_jac
+
+In-place ordered-row simplex matrix transform. Returns log Jacobian determinant.
+"""
 function ordered_simplex_matrix!(mat::AbstractMatrix{<:Real},
                                  q::AbstractVector{<:Real},
                                  K::Int, V::Int)
@@ -173,11 +196,11 @@ function ordered_simplex_matrix!(mat::AbstractMatrix{<:Real},
     return log_jac
 end
 
-# ── Correlation Cholesky (CPC / tanh parameterization) ───────────────────────
-# Maps D*(D-1)/2 unconstrained reals → D×D lower-triangular Cholesky factor
-# of a correlation matrix (rows have unit norm, so LL^T has ones on diagonal).
-# Uses Canonical Partial Correlations: each z maps through tanh to (-1,1).
+"""
+    corr_cholesky_transform(z, D) → (L, log_jac)
 
+Canonical partial correlations transform to correlation Cholesky factor. Returns `(L, log_jac)`.
+"""
 function corr_cholesky_transform(z::AbstractVector{<:Real}, D::Int)
     T = eltype(z)
     L = zeros(T, D, D)
@@ -185,6 +208,11 @@ function corr_cholesky_transform(z::AbstractVector{<:Real}, D::Int)
     return L, log_jac
 end
 
+"""
+    corr_cholesky_transform!(L, z, D) → log_jac
+
+In-place CPC transform to correlation Cholesky factor. Returns log Jacobian determinant.
+"""
 function corr_cholesky_transform!(L::AbstractMatrix{<:Real}, z::AbstractVector{<:Real}, D::Int)
     T = promote_type(eltype(L), eltype(z))
     log_jac = zero(T)

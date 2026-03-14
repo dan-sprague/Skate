@@ -22,7 +22,12 @@ Evaluate the log-density of `model` at unconstrained parameter vector `q`.
 """
 log_prob(m::ModelLogDensity, q) = m.ℓ(q)
 
-## Reverse mode — one forward+backward pass, O(1) in dim
+"""
+    ∇logp_reverse!(g, ℓ, q) → (lp, ok)
+
+Compute gradient of log-density via Enzyme reverse-mode AD. Writes gradient into `g`.
+Returns `(log_prob, success)`.
+"""
 function ∇logp_reverse!(g::Vector{Float64}, ℓ::ModelLogDensity, q::Vector{Float64})
     fill!(g, 0.0)
 
@@ -54,7 +59,12 @@ function ∇logp_reverse!(g::Vector{Float64}, ℓ::ModelLogDensity, q::Vector{Fl
     return lp, true
 end
 
-## Batched forward mode — one widened forward pass, all partials at once
+"""
+    ∇logp_forward!(g, ℓ, q, seeds) → (lp, ok)
+
+Compute gradient of log-density via Enzyme batched forward-mode AD. Writes gradient into `g`.
+Returns `(log_prob, success)`.
+"""
 function ∇logp_forward!(g::Vector{Float64}, ℓ::ModelLogDensity, q::Vector{Float64}, seeds)
     fill!(g, 0.0)
 

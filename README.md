@@ -1,16 +1,16 @@
 # PhaseSkate
 
-High-performance HMC Bayesian inference in native Julia. An implementation of, and love letter to, the Stan approach to PPLs. Except no tildes. 
+High-performance HMC Bayesian inference in native Julia. An implementation of, and love letter to, the Stan approach to PPLs. Except no tildes.
 
-Built for [Enzyme](https://github.com/EnzymeAD/Enzyme.jl). 
+Built for [Enzyme](https://github.com/EnzymeAD/Enzyme.jl).
 
 > Early-stage — API may change. Contributions and feedback welcome!
 
 ## Why PhaseSkate?
 
-I built this package to answer a question that has been bothing me: *What is the best way to generate very efficient logjoint functions in a way that will play nice with Enzyme AD?* 
+I built this package to answer a question that has been bothering me: *What is the best way to generate very efficient logjoint functions in a way that will play nice with Enzyme AD?*
 
-HMC is intensive, CPU-bound numerical computation of complex gradients — at its heart a physics simulation of a particle skating around phase space. This is Julia's home turf!!!!!!!
+HMC is intensive, CPU-bound numerical computation of complex gradients — at its heart a physics simulation of a particle skating around phase space. This is Julia's home turf.
 
 **Design principles:**
 
@@ -22,7 +22,7 @@ HMC is intensive, CPU-bound numerical computation of complex gradients — at it
 
 1. A Stan-like DSL, with some changes.
 2. Stan-like LKJ and Cholesky factorization for covariance matrices (or whatever) and out-of-the-box NegBin(mu,disp) parameterization, sometimes called "NegBin2".
-4. `@for` - keep readable broadcast math that gets rewritten under the hood as a direct accumulator into `target`. Allows you to accumulate multiple things sharing a common axis of iteration in a single for loop while keeping things legible :).
+3. `@for` - keep readable broadcast math that gets rewritten under the hood as a direct accumulator into `target`. Allows you to accumulate multiple things sharing a common axis of iteration in a single for loop while keeping things legible :).
 ```julia
 @for target += begin
             log_k_2 = mu_k .+ (tier2_X * beta_k) .+ mu_country_k[tier2_country_ids] .+ (omega_k .* z_k)
@@ -31,32 +31,15 @@ HMC is intensive, CPU-bound numerical computation of complex gradients — at it
 ```
 4. Auto @view: Maybe could be annoying, but the DSL is currently setup so that `arr[idx,:]` operations automatically have `@view` applied.
 
-
-
-**Implementation Notes:**
-
-1. Minimal dependencies. In my quest to answer the motivating question described above, I wanted total control over the code being passed into Enzyme AD. You will find lpdfs, bijections, and a reimplementation of Stan's NUTS algorithm in this repository.
-
-
-**Testing**
-
-1. Simulation Based Calibration -- replicated experiments on Stan's documentation page. 
-2. PosteriorDB -- validated against reference posteriors. 
-3. Validate lpdfs against Distributions.jl logpdf functions.
-
-
 ## Installation
 
-```julia
-using Pkg
-Pkg.add(url="https://github.com/YOUR_USERNAME/PhaseSkate.jl")
+```bash
+git clone https://github.com/dansprague/PhaseSkate.jl
 ```
 
-Or for local development:
-
 ```julia
 using Pkg
-Pkg.develop(path="/path/to/PhaseSkate")
+Pkg.develop(path="path/to/PhaseSkate.jl")
 ```
 
 ## Getting Started
@@ -191,24 +174,12 @@ See `examples/joint_alm.jl` for the complete runnable script.
 
 ## Benchmarks
 
-Cross-language benchmarks on the JointALM model (identical data, same sampler settings) are in `benchmarks/`. To run:
-
-```bash
-# Generate shared dataset
-julia benchmarks/generate_data.jl
-
-# Run each backend
-julia benchmarks/bench_phaseskate.jl
-JAX_PLATFORMS=cpu python benchmarks/bench_blackjax.py
-Rscript benchmarks/bench_stan.R
-
-# Compare results
-julia benchmarks/compare.jl
-```
+Cross-language benchmarks live in a separate repo: [PhaseSkateBenchmark](https://github.com/dansprague/PhaseSkateBenchmark).
 
 ## More Examples
 
 See the `examples/` directory:
+- `lda.jl` — Latent Dirichlet Allocation
 - `mixture_model.jl` — K=2 Gaussian mixture with simplex weights
 - `logistic_regression.jl` — Bayesian logistic regression
 - `hierarchical_normal.jl` — Eight Schools (Rubin, 1981)

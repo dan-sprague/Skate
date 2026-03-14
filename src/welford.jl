@@ -1,13 +1,19 @@
+"""Online diagonal variance estimator via Welford's algorithm."""
 mutable struct WelfordState
     n::Int
     mean::Vector{Float64}
     M2n::Vector{Float64}
-    
+
     function WelfordState(D::Int)
         new(0, zeros(D), zeros(D))
     end
 end
 
+"""
+    welford_update!(state, x_k)
+
+Incorporate sample `x_k` into the running variance estimate.
+"""
 function welford_update!(state::WelfordState, x_k::AbstractVector{Float64})
     length(x_k) == length(state.mean) || throw(ArgumentError("welford_update!: x_k length ($(length(x_k))) must match state dimension ($(length(state.mean)))"))
     state.n += 1
@@ -23,6 +29,11 @@ function welford_update!(state::WelfordState, x_k::AbstractVector{Float64})
     end
 end
 
+"""
+    welford_variance(state) → Vector{Float64}
+
+Return the current variance estimate as a new vector.
+"""
 function welford_variance(state::WelfordState)
     if state.n < 2
         return ones(length(state.mean))
@@ -30,6 +41,11 @@ function welford_variance(state::WelfordState)
     return state.M2n ./ (state.n - 1)
 end
 
+"""
+    welford_variance!(out, state)
+
+Write the current variance estimate into `out`.
+"""
 function welford_variance!(out::Vector{Float64}, state::WelfordState)
     if state.n < 2
         fill!(out, 1.0)
@@ -44,6 +60,7 @@ end
 
 ## ── Full-covariance Welford (for dense metric) ──
 
+"""Online full-covariance estimator via Welford's algorithm."""
 mutable struct WelfordCovState
     n::Int
     mean::Vector{Float64}
@@ -82,6 +99,11 @@ function welford_update!(state::WelfordCovState, x_k::AbstractVector{Float64})
     end
 end
 
+"""
+    welford_covariance(state) → Matrix{Float64}
+
+Return the current covariance matrix estimate.
+"""
 function welford_covariance(state::WelfordCovState)
     if state.n < 2
         D = length(state.mean)
