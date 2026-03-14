@@ -17,7 +17,7 @@ Things spiraled when I decided Enzyme had to be able to do static analysis of th
 1. Built for Enzyme and Enzyme only, meaning static analysis on lpdfs at Enzyme compile time. lpdfs are implemented as pure, numerical functions with no external dependencies.
 2. Stan-like PPL: Stan's PPL is actually quite valuable for writing performant models. PhaseSkate both encourages clarity and type stability in the model definition, and also verifies that all functions inside the logjoint are statically analyzable/return concrete Float64.
 3. Live chain traces and diagnostics in a `Tachikoma.jl` powered TUI!
-4. Narrow focus -- no discrete sampling! See examples and tutorials for how to sample models with discrete variables.
+4. Narrow focus -- no discrete sampling! See examples and tutorials for how to sample models with discrete variables, or use the excellent `Turing.jl` ecosystem.
 
 5. `@for` - keep readable broadcast math that gets rewritten under the hood as a direct accumulator into `target`. Allows you to accumulate multiple things sharing a common axis of iteration in a single for loop while keeping things legible :).
 ```julia
