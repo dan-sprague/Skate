@@ -19,9 +19,10 @@ Additionally, I have often wished I could track sampling progress for complex mo
 **Features**
 
 1. Built for Enzyme and Enzyme only, meaning static analysis on lpdfs at Enzyme compile time. lpdfs are implemented as pure, numerical functions with no external dependencies.
-            - Includes a `@for` for use inside the logjoint, allows you to keep readable broadcast math that gets rewritten under the hood as a direct accumulator into `target`. Allows you to accumulate multiple things sharing a common axis of iteration in a single for loop while keeping things legible :).
-3. Live chain traces and diagnostics in a `Tachikoma.jl` powered TUI!
-4. Aims to be good at HMC -- no discrete sampling! See examples and tutorials for how to sample models with discrete variables.
+2. Live chain traces and diagnostics in a `Tachikoma.jl` powered TUI!
+3. Aims to be good at HMC -- no discrete sampling! See examples and tutorials for how to sample models with discrete variables.
+
+4. `@for` - keep readable broadcast math that gets rewritten under the hood as a direct accumulator into `target`. Allows you to accumulate multiple things sharing a common axis of iteration in a single for loop while keeping things legible :).
 ```julia
 @for target += begin
             log_k_2 = mu_k .+ (tier2_X * beta_k) .+ mu_country_k[tier2_country_ids] .+ (omega_k .* z_k)
