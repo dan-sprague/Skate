@@ -7,4 +7,4 @@ PhaseSkate = "d9f16b3c-1d8e-11eb-0a9c-5b1e7cfae1b2"
 WGLMakie = "276b4fcb-3e11-5398-bf8b-a0c2d153d008"
 
 [sources]
-PhaseSkate = {path = ".."}
+PhaseSkate = {path = "/Users/dansprague/Documents/PhaseSkate"}

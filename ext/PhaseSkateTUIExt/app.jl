@@ -339,13 +339,15 @@ function _render_status_bar(m::IDEModel, area::Rect, buf::Buffer)
     end
     push!(left_spans, Span(" $focus_label ", tstyle(:primary, bold=true)))
 
-    # Sampling status
-    if m.sampling_done
+    # Compilation / sampling status
+    if m.compiling
+        push!(left_spans, Span("  ⟳ compiling gradient... ", tstyle(:secondary)))
+    elseif m.sampling_done
         push!(left_spans, Span("  ✓ done ", tstyle(:success)))
     elseif !isempty(m.chain_progress)
-        # Show aggregate progress
         total_pct = _aggregate_progress(m)
-        push!(left_spans, Span("  ⟳ $(total_pct)% ", tstyle(:warning)))
+        phase_label = _aggregate_phase(m)
+        push!(left_spans, Span("  ⟳ $phase_label $(total_pct)% ", tstyle(:warning)))
     end
 
     if m.compiling_binary
@@ -535,6 +537,7 @@ function Tachikoma.update!(m::IDEModel, evt::Tachikoma.TaskEvent)
             m.benchmark_done = true
         end
     elseif evt.id == :compile
+        m.compiling = false
         if evt.value isa Exception
             _ide_log("compile error: $(sprint(showerror, evt.value))")
             m.compile_error = sprint(showerror, evt.value)
@@ -825,6 +828,12 @@ function _aggregate_progress(m::IDEModel)
     round(Int, 100 * total / m.n_chains)
 end
 
+function _aggregate_phase(m::IDEModel)
+    isempty(m.chain_progress) && return "waiting"
+    any_sampling = any(cp -> cp.phase == :sampling, m.chain_progress)
+    any_sampling ? "sampling" : "warmup"
+end
+
 function _render_help(area::Rect, buf::Buffer)
     help_text = """
     PhaseSkate IDE — Keyboard Shortcuts
@@ -984,6 +993,7 @@ function _compile_and_run!(m::IDEModel)
     empty!(m.defined_constants)
 
     # Compile in background
+    m.compiling = true
     Tachikoma.spawn_task!(m.tq, :compile) do
         _compile_model(source)
     end

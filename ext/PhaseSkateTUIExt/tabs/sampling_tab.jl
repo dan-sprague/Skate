@@ -3,13 +3,15 @@
 function _render_sampling_tab(m::IDEModel, area::Rect, buf::Buffer)
     if isempty(m.chain_progress) && !m.sampling_done
         # Pre-sampling state
-        msg = if m.model === nothing
-            "Ready — define data in the REPL, then press F5 to compile and run"
+        msg = if m.compiling
+            "Compiling model + gradient (Enzyme JIT)..."
+        elseif m.model === nothing
+            "Define data in the REPL, then press F5 to compile and run"
         elseif m.benchmark_done
             est = _format_time(m.estimated_seconds)
             "~$est  (grad: $(round(m.grad_μs; digits=1)) μs)"
         else
-            "Compiling gradient..."
+            "Benchmarking gradient..."
         end
         render(Paragraph(msg; wrap=word_wrap,
                block=Block(; title="Sampling")), area, buf)

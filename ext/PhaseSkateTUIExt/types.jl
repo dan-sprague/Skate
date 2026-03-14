@@ -76,6 +76,9 @@ mutable struct IDEModel <: Tachikoma.Model
     show_help::Bool
     quit::Bool
 
+    # Model compilation (between F5 and sampling start)
+    compiling::Bool
+
     # Binary compilation
     compiling_binary::Bool
     binary_output::Vector{String}       # juliac stdout/stderr lines
@@ -187,6 +190,7 @@ function IDEModel(;
         nothing,            # repl_widget
         false,
         false,
+        false,              # compiling
         false,              # compiling_binary
         String[],           # binary_output
         nothing,            # binary_path

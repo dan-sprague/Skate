@@ -1,48 +1,129 @@
-/* ── Widen VitePress layout ────────────────────────────────── */
+/* ── Page-level layout ─────────────────────────────────────── */
 :root { --vp-layout-max-width: 1800px; }
 
-/* ── Hero layout ───────────────────────────────────────────── */
-.VPHome .VPHero .image { display: none; }
-
-/* ── Hero + Case Study side by side on wide screens ────────── */
-.VPHome {
-  display: grid !important;
-  grid-template-columns: 1fr;
+/* ── Home page layout ─────────────────────────────────────── */
+.ps-home {
+  display: flex;
+  flex-direction: column;
+  gap: 2rem;
   max-width: 1800px;
   margin: 0 auto;
-  padding: 0 24px;
+  padding: 2rem 24px 4rem;
 }
 @media (min-width: 1200px) {
-  .VPHome {
-    grid-template-columns: auto 1fr;
+  .ps-home {
+    display: grid;
+    grid-template-columns: 420px minmax(0, 800px);
     align-items: start;
-    gap: 2rem;
-  }
-  .VPHome > .VPHero {
-    grid-column: 1;
-    grid-row: 1;
-    max-width: 480px;
-    position: sticky;
-    top: calc(var(--vp-nav-height) + 1rem);
-  }
-  /* raw HTML slot — may have extra wrapper divs */
-  .VPHome > .vp-doc,
-  .VPHome > div:last-child {
-    grid-column: 2;
-    grid-row: 1;
+    gap: 3rem;
+    padding: 3rem 48px 4rem;
   }
 }
 
-/* ── Case study section ────────────────────────────────────── */
-.case-study {
-  width: 100%;
-  max-width: 100%;
-  margin: 0;
-  padding: 2.5rem 3rem 2.5rem;
-  background: var(--vp-c-bg-soft);
-  border: 1px solid var(--vp-c-divider);
-  border-radius: 16px;
+/* ── Hero (left column) ───────────────────────────────────── */
+.ps-hero {
+  display: flex;
+  flex-direction: column;
 }
+@media (min-width: 1200px) {
+  .ps-hero {
+    position: sticky;
+    top: calc(var(--vp-nav-height, 64px) + 1.5rem);
+  }
+}
+.ps-hero-name {
+  font-size: 2.8rem;
+  font-weight: 700;
+  background: linear-gradient(120deg, #bd34fe 30%, #41d1ff);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  line-height: 1.1;
+  margin: 0 0 0.25rem;
+}
+.ps-hero-text {
+  font-size: 2rem;
+  font-weight: 700;
+  color: var(--vp-c-text-1);
+  line-height: 1.2;
+  margin: 0 0 0.75rem;
+}
+.ps-hero-tagline {
+  font-size: 1.1rem;
+  color: var(--vp-c-text-2);
+  line-height: 1.5;
+  margin: 0 0 1.5rem;
+}
+
+/* ── Action buttons ───────────────────────────────────────── */
+.ps-hero-actions {
+  display: flex;
+  gap: 0.75rem;
+  margin-bottom: 2rem;
+}
+.ps-btn {
+  display: inline-block;
+  padding: 0.6rem 1.4rem;
+  border-radius: 20px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  text-decoration: none;
+  transition: opacity 0.2s;
+}
+.ps-btn:hover { opacity: 0.85; }
+.ps-btn-brand {
+  background: var(--vp-c-brand);
+  color: #fff;
+}
+.ps-btn-alt {
+  border: 1px solid var(--vp-c-divider);
+  color: var(--vp-c-text-1);
+}
+
+/* ── Feature cards (below buttons) ────────────────────────── */
+.ps-features {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+.ps-feature {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+}
+.ps-feature-icon {
+  flex-shrink: 0;
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  background: var(--vp-c-bg-soft);
+  color: var(--vp-c-brand);
+}
+.ps-feature-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+.ps-feature-body strong {
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: var(--vp-c-text-1);
+}
+.ps-feature-body span {
+  font-size: 0.82rem;
+  color: var(--vp-c-text-2);
+  line-height: 1.5;
+}
+
+/* ── Showcase (right column) ──────────────────────────────── */
+.ps-showcase {
+  min-width: 0;
+}
+
+/* ── Case study section ───────────────────────────────────── */
 .case-study-title {
   font-size: 2rem;
   font-weight: 700;
@@ -58,7 +139,7 @@
   max-width: 70ch;
 }
 
-/* ── Model summary table ─────────────────────────────────── */
+/* ── Model summary table ──────────────────────────────────── */
 .model-summary {
   border-collapse: collapse;
   font-size: 0.9rem;
@@ -77,14 +158,14 @@
   font-weight: 600;
 }
 
-/* ── Stacked: plot on top, toggle below ───────────────────── */
+/* ── Stacked: plot on top, toggle below ────────────────────── */
 .case-study-grid {
   display: flex;
   flex-direction: column;
   gap: 2rem;
 }
 
-/* ── Toggle switch ───────────────────────────────────────── */
+/* ── Description / Code toggle ─────────────────────────────── */
 .model-toggle input[type="radio"] { display: none; }
 
 .toggle-bar {
@@ -118,26 +199,18 @@
   color: #fff;
 }
 
-/* ── Toggle content visibility ───────────────────────────── */
-#toggle-desc:checked ~ .panels-wrapper > .panel-desc { visibility: visible; }
-#toggle-code:checked ~ .panels-wrapper > .panel-code { visibility: visible; }
-
-/* ── Keep toggle panels same size (overlay so height doesn't jump on toggle) */
 .model-toggle {
   min-width: 0;
   position: relative;
 }
-.panels-wrapper {
-  display: grid;
-}
 .panels-wrapper > .panel-desc,
 .panels-wrapper > .panel-code {
-  grid-column: 1;
-  grid-row: 1;
-  visibility: hidden;
+  display: none;
 }
+#toggle-desc:checked ~ .panels-wrapper > .panel-desc { display: block; }
+#toggle-code:checked ~ .panels-wrapper > .panel-code { display: block; }
 
-/* ── Bullet list styling ─────────────────────────────────── */
+/* ── Bullet list styling ──────────────────────────────────── */
 .model-toggle .panel-desc ul {
   padding-left: 1.25rem;
   line-height: 1.75;
@@ -146,14 +219,14 @@
   margin-bottom: 0.4rem;
 }
 
-/* ── Code panel font ─────────────────────────────────────── */
+/* ── Code panel font ──────────────────────────────────────── */
 .model-toggle .panel-code pre,
 .model-toggle .panel-code code {
   font-size: 0.75rem !important;
   line-height: 1.5 !important;
 }
 
-/* ── Plot card ───────────────────────────────────────────── */
+/* ── Plot card ────────────────────────────────────────────── */
 .plot-card {
   border-radius: 12px;
   overflow: hidden;
@@ -166,7 +239,7 @@
   height: auto;
 }
 
-/* ── Top-level showcase tabs ────────────────────────────── */
+/* ── Top-level showcase tabs (Case Study / PPL IDE) ───────── */
 .showcase-toggle input[type="radio"] { display: none; }
 
 .showcase-bar {
@@ -200,18 +273,13 @@
   color: #fff;
 }
 
-.showcase-panels {
-  display: grid;
-}
 .showcase-panels > .showcase-panel {
-  grid-column: 1;
-  grid-row: 1;
-  visibility: hidden;
+  display: none;
 }
-#showcase-casestudy:checked ~ .showcase-panels > .showcase-panel-casestudy { visibility: visible; }
-#showcase-ide:checked ~ .showcase-panels > .showcase-panel-ide { visibility: visible; }
+#showcase-casestudy:checked ~ .showcase-panels > .showcase-panel-casestudy { display: block; }
+#showcase-ide:checked ~ .showcase-panels > .showcase-panel-ide { display: block; }
 
-/* ── Asciinema player styling ───────────────────────────── */
+/* ── Asciinema player ─────────────────────────────────────── */
 .ide-demo-card {
   border-radius: 12px;
   overflow: hidden;

@@ -1,31 +1,62 @@
 ```@raw html
 ---
-layout: home
-
-hero:
-  name: PhaseSkate
-  text: High Performance Bayesian Inference In Julia
-  tagline: Fast sampling built for complex models on your laptop.
-  actions:
-    - theme: brand
-      text: Getting Started
-      link: /getting_started
-    - theme: alt
-      text: API Reference
-      link: /api
-
+layout: page
+sidebar: false
 ---
 ```
 
 ````@raw html
-<div class="vp-doc case-study showcase-toggle">
+<div class="ps-home">
 
-<input type="radio" name="showcase" id="showcase-casestudy" checked>
-<input type="radio" name="showcase" id="showcase-ide">
+<div class="ps-hero">
+  <h1 class="ps-hero-name">PhaseSkate</h1>
+  <p class="ps-hero-text">Bayesian Inference In Julia</p>
+  <p class="ps-hero-tagline">Fast sampling built for complex models on your laptop.</p>
+
+  <div class="ps-hero-actions">
+    <a class="ps-btn ps-btn-brand" href="/getting_started">Getting Started</a>
+    <a class="ps-btn ps-btn-alt" href="/api">API Reference</a>
+  </div>
+
+  <div class="ps-features">
+    <div class="ps-feature">
+      <div class="ps-feature-icon">
+        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+      </div>
+      <div class="ps-feature-body">
+        <strong>High Performance</strong>
+        <span>PhaseSkate was built for sampling large models on your laptop, quickly!</span>
+      </div>
+    </div>
+    <div class="ps-feature">
+      <div class="ps-feature-icon">
+        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/></svg>
+      </div>
+      <div class="ps-feature-body">
+        <strong>Targeted</strong>
+        <span>PhaseSkate was built to excel at HMC. Guides available on how to sample discrete models.</span>
+      </div>
+    </div>
+    <div class="ps-feature">
+      <div class="ps-feature-icon">
+        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+      </div>
+      <div class="ps-feature-body">
+        <strong>Real Time Sampling Analytics</strong>
+        <span>The PhaseSkate TUI provides real-time chain traces and analytics so issues can be spotted early.</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="ps-showcase vp-doc showcase-toggle">
+
+<input type="radio" name="showcase" id="showcase-casestudy">
+<input type="radio" name="showcase" id="showcase-ide" checked>
 
 <div class="showcase-bar">
   <label for="showcase-casestudy">Case Study</label>
-  <label for="showcase-ide">PPL IDE</label>
+  <label for="showcase-ide">Real-Time Interface</label>
 </div>
 
 <div class="showcase-panels">
@@ -131,33 +162,51 @@ end
   <div id="ide-player"></div>
 </div>
 
-<div
-  id="ide-player-loader"
-  data-cast="/PhaseSkate/dev/assets/demo.cast"
-  style="display:none;"
-></div>
-
 </div> <!-- end showcase-panel-ide -->
 
 </div> <!-- end showcase-panels -->
 
-</div> <!-- end showcase-toggle -->
+</div> <!-- end ps-showcase -->
+
+</div> <!-- end ps-home -->
 
 <script setup>
 import { onMounted } from 'vue'
 
 onMounted(() => {
-  const el = document.getElementById('ide-player')
-  if (!el || el.hasChildNodes()) return
+  // Load CSS
+  if (!document.querySelector('link[href*="asciinema-player"]')) {
+    const link = document.createElement('link')
+    link.rel = 'stylesheet'
+    link.href = 'https://unpkg.com/asciinema-player@3.15.1/dist/bundle/asciinema-player.css'
+    document.head.appendChild(link)
+  }
 
+  // Load JS, then create player when IDE tab is first shown
   const script = document.createElement('script')
-  script.src = 'https://unpkg.com/asciinema-player@3.9.0/dist/bundle/asciinema-player.min.js'
+  script.src = 'https://unpkg.com/asciinema-player@3.15.1/dist/bundle/asciinema-player.min.js'
   script.onload = () => {
-    AsciinemaPlayer.create(
-      '/PhaseSkate/dev/assets/demo.cast',
-      el,
-      { autoPlay: true, loop: true, speed: 2, theme: 'monokai', fit: 'width', cols: 220, rows: 55 }
-    )
+    const radio = document.getElementById('showcase-ide')
+    const base = document.querySelector('base')?.getAttribute('href') || '/'
+
+    function initPlayer() {
+      const el = document.getElementById('ide-player')
+      if (!el || el.hasChildNodes()) return
+      window.AsciinemaPlayer.create(
+        base + 'assets/demo.cast',
+        el,
+        { autoPlay: true, loop: true, speed: 2, theme: 'monokai', fit: 'width' }
+      )
+    }
+
+    // If IDE tab is already active, init now; otherwise wait for click
+    if (radio && radio.checked) {
+      initPlayer()
+    }
+    radio.addEventListener('change', () => { setTimeout(initPlayer, 50) })
+    // Also catch label clicks
+    document.querySelector('label[for="showcase-ide"]')
+      ?.addEventListener('click', () => { setTimeout(initPlayer, 100) })
   }
   document.head.appendChild(script)
 })
