@@ -8,28 +8,24 @@ Built for [Enzyme](https://github.com/EnzymeAD/Enzyme.jl).
 
 ## Why PhaseSkate?
 
-I built this package to answer a question that has been bothering me: *What is the best way to generate very efficient logjoint functions in a way that will play nice with Enzyme AD?*
+PhaseSkate started off more as a pretty simple question, really. Given a performant logpdf function, how fast can Julia + Enzyme AD NUTS draw posterior samples? 
 
-HMC is intensive, CPU-bound numerical computation of complex gradients — at its heart a physics simulation of a particle skating around phase space. This is Julia's home turf.
-
-**Design principles:**
-
-1. **Speed** — Pure log-density and jacobian functions designed to feed efficient code into Enzyme AD.
-2. **Clarity** — The `@skate` DSL defines constants, parameters, and the log-joint in a single cohesive block. No scattered model definitions.
-3. **No tildes** — `target += normal_lpdf(x, mu, sigma)` makes the log-joint accumulation explicit. Fast code = non-allocating code.
+Things spiraled when I decided Enzyme had to be able to do static analysis of the gradient on an arbtitrary *lpdf* at compile time, ie no `set_runtime_analysis`. This meant that my logpdf could not be passed through any generic interfaces, which essentially led to the package you see now. In practice, this means that PhaseSkate has its own implementation of Stan's NUTS algorithm, as well as its own implementation of `lpdf` functions, which in the examples you will see are called in the style of Stan. 
 
 **Features**
 
-1. A Stan-like DSL, with some changes.
-2. Stan-like LKJ and Cholesky factorization for covariance matrices (or whatever) and out-of-the-box NegBin(mu,disp) parameterization, sometimes called "NegBin2".
-3. `@for` - keep readable broadcast math that gets rewritten under the hood as a direct accumulator into `target`. Allows you to accumulate multiple things sharing a common axis of iteration in a single for loop while keeping things legible :).
+1. Built for Enzyme and Enzyme only, meaning static analysis on lpdfs at Enzyme compile time. JET.jl is used to catch generics/invalid type signatures in the logjoint function.
+2. Stan-like PPL: Stan's PPL is actually quite valuable for writing performant models. PhaseSkate both encourages clarity and type stability in the model definition, and also verifies that all functions inside the logjoint are statically analyzable/return concrete Float64.
+3. Live chain traces and diagnostics in a `Tachikoma.jl` powered TUI!
+4. Narrow focus -- no discrete sampling! See examples and tutorials for how to sample models with discrete variables, or use the excellent `Turing.jl` ecosystem.
+
+5. `@for` - keep readable broadcast math that gets rewritten under the hood as a direct accumulator into `target`. Allows you to accumulate multiple things sharing a common axis of iteration in a single for loop while keeping things legible :).
 ```julia
-@for target += begin
-            log_k_2 = mu_k .+ (tier2_X * beta_k) .+ mu_country_k[tier2_country_ids] .+ (omega_k .* z_k)
-            log_eff_scale_2 = log_scale .- ((tier2_X * beta_s) .+ mu_country_s[tier2_country_ids] ...
-        end
+@for begin
+    log_k_2 = mu_k .+ (tier2_X * beta_k) .+ mu_country_k[tier2_country_ids] .+ (omega_k .* z_k)
+    log_eff_scale_2 = log_scale .- ((tier2_X * beta_s) .+ mu_country_s[tier2_country_ids] .+ gamma_k .* log_k_2) .* inv_shape
+end
 ```
-4. Auto @view: Maybe could be annoying, but the DSL is currently setup so that `arr[idx,:]` operations automatically have `@view` applied.
 
 ## Installation
 

@@ -76,12 +76,13 @@ Inside `@logjoint`, the `@for` macro converts broadcast expressions into zero-al
 end
 ```
 
-This expands to something like:
+This expands to:
 ```julia
+__matvec_1 = X * beta_k
 log_k = Vector{Float64}(undef, N)
 log_scale = Vector{Float64}(undef, N)
-for i in 1:N
-    log_k[i] = mu_k + (X[i,1]*beta_k[1] + X[i,2]*beta_k[2] + ...) + mu_group[group_ids[i]]
+@inbounds @simd for i in 1:N
+    log_k[i] = mu_k + __matvec_1[i] + mu_group[group_ids[i]]
     log_scale[i] = log_s - (gamma * log_k[i]) * inv_shape
 end
 ```

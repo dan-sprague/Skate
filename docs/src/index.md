@@ -56,7 +56,7 @@ sidebar: false
 
 <div class="showcase-bar">
   <label for="showcase-ide">Real-Time Interface</label>
-  <label for="showcase-casestudy">Case Study</label>
+  <label for="showcase-casestudy">Example: Hierarchical AFT Survival</label>
 </div>
 
 <div class="showcase-panels">
@@ -78,7 +78,7 @@ sidebar: false
 
 <div class="showcase-panel showcase-panel-casestudy">
 
-<h1 class="case-study-title">Case Study: Multi-site Hierarchical Survival Model</h1>
+<h1 class="case-study-title">Example: Hierarchical Accelerating Failure Time Survival</h1>
 <p class="case-study-subtitle">Sample a complex, hierarchical survival model with thousands of observations in approximately a minute with Enzyme powered dense mass matrix NUTS sampling.</p>
 
 <table class="model-summary">
@@ -205,7 +205,7 @@ onMounted(() => {
       window.AsciinemaPlayer.create(
         castUrl,
         el,
-        { autoPlay: true, loop: true, speed: 2, theme: 'monokai', fit: 'width' }
+        { autoPlay: true, loop: true, speed: 2, theme: 'monokai', fit: 'width', startAt: 34, endAt: 61 }
       )
     }
 
