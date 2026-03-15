@@ -11,7 +11,7 @@ function _render_sampling_tab(m::IDEModel, area::Rect, buf::Buffer)
             est = _format_time(m.estimated_seconds)
             "~$est  (grad: $(round(m.grad_μs; digits=1)) μs)"
         else
-            "Benchmarking gradient..."
+            "Compiling model + gradient (Enzyme JIT)..."
         end
         render(Paragraph(msg; wrap=word_wrap,
                block=Block(; title="Sampling")), area, buf)
